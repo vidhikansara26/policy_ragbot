@@ -1,5 +1,5 @@
 ---
-description: Production Python standards for the RAG lab source code
+description: Production Python standards for the enterprise RAG platform
 globs: "**/*.py"
 alwaysApply: false
 ---

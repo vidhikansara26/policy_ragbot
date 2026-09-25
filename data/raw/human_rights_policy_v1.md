@@ -4,13 +4,13 @@ section: "Fair Wages and Remuneration"
 version: "1.0"
 status: "legacy"
 company: "NIIT Technologies Limited (now Coforge Limited)"
-source_url: "lab-planted-defect"
+source_url: "synthetic-legacy-conflict"
 effective_date: "initial-release"
 ---
 
 # Human Rights Policy (Initial Release — LEGACY, DO NOT USE FOR CURRENT ANSWERS)
 
-Lab-planted defect: this reconstructed v1 stays in the corpus on purpose. The official
+Data-quality fixture: this reconstructed v1 stays in the corpus on purpose. The official
 investor Human Rights Policy version history lists an initial v1 and a v2 dated
 20-Mar-2025 ("Addition of clauses"). This file is the stale copy a naive indexer
 would keep. It contradicts current policy on Privilege Leave / PTO and on the

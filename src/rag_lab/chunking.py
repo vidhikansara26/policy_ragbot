@@ -2,7 +2,7 @@
 
 Splitters are a fixed coarse-to-fine ladder (not an LLM). A unit that still
 exceeds ``CHUNK_SIZE`` is recursed into the next finer type. Sibling
-headings are never merged, so Part 7 can cite a real section name. Adjacent
+headings are never merged, so generated answers can cite a real section name. Adjacent
 paragraphs and sentences are packed greedily up to the size budget. Character
 windows with overlap are the last resort.
 """

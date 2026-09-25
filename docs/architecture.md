@@ -1,26 +1,30 @@
-# RAG Lab Architecture
+# Policy RAG architecture
 
-Status: Part 1 complete. This document freezes the Part 2 design before code.
-Corpus measured 2026-09-25 from `data/raw/*.md`.
+Status: Corpus and hierarchical chunking are in production code. This document
+locks ingest and retrieve-loop design before MiniLM + Chroma.
 
-## 1. What we are building
-
-A retrieval-augmented generation pipeline over **public Coforge investor policies**, with a **planted data-quality defect** so we can later prove the system retrieved the wrong version of Human Rights Policy.
+Enterprise policy assistant over **versioned Coforge investor policies**, with a
+**known data-quality fixture** (stale Human Rights v1) so retrieval can surface
+the wrong policy version — a data incident, not a model failure.
 
 ```
 data/raw/*.md
-    → load_corpus()          # Part 1  (done)
-    → chunk_document()       # Part 2  (next)
-    → embed MiniLM           # Part 2  (next)
-    → ChromaDB persist       # Part 2  (next)
-    → dense retrieve         # Part 2  (minimal loop)
-    → BM25 + RRF             # Part 3  (blocked until test_minimal_loop.py)
-    → cross-encoder rerank   # Part 4
-    → generate + cite        # Part 5–7
-    → GitHub Actions         # Part 8
+    → load_corpus()          # done
+    → chunk_document()       # done
+    → embed MiniLM           # next
+    → ChromaDB persist       # next
+    → dense retrieve         # minimal loop (gate)
+    → BM25 + RRF             # blocked until test_minimal_loop.py
+    → cross-encoder rerank
+    → generate + cite
+    → GitHub Actions CI
 ```
 
 **Gate:** hybrid search, reranking, and CI stay off until `tests/test_minimal_loop.py` is green (load → chunk → embed → store → retrieve).
+
+## 1. Pipeline slice
+
+The block above is the production path. Later phases add hybrid fusion, reranking, generation with citations, eval, and CI.
 
 ## 2. Corpus facts (measured, not assumed)
 
@@ -35,14 +39,14 @@ data/raw/*.md
 | `ehs_policy.md` | 2,472 | 331 | 5 | Net zero 2040 |
 | `modern_slavery_statement.md` | 2,430 | 344 | 6 | UK MSA training |
 | `board_diversity_policy.md` | 2,368 | 337 | 5 | Board composition |
-| `human_rights_policy_v1.md` | 1,675 | 246 | 6 | **Legacy planted defect** |
+| `human_rights_policy_v1.md` | 1,675 | 246 | 6 | **Stale v1 data-quality fixture** |
 | **Total** | **32,097** | | | 10 documents |
 
 Paragraphs in the corpus: **179**. Median length **112** chars. 90th percentile **391**. Longest **1,123**.
 
-These numbers drive chunk size. A 300-char window would cut most of the long POSH / Human Rights paragraphs in half. A 1,000-char window would bury the planted “15 days Privilege Leave” clause inside a large Human Rights v1/v2 vector.
+These numbers drive chunk size. A 300-char window would cut most of the long POSH / Human Rights paragraphs in half. A 1,000-char window would bury the stale “15 days Privilege Leave” clause inside a large Human Rights v1/v2 vector.
 
-## 3. Chunking strategy (locked for Part 2)
+## 3. Chunking strategy (locked)
 
 **Method:** static recursive hierarchical typing.
 
@@ -61,7 +65,7 @@ document
 Rules:
 
 1. If the whole document is ≤ 500 characters, emit one `document` chunk.
-2. Split on `## ` first. Each H2 is its own unit. **Do not pack two sections together** — Part 7 needs a real section name.
+2. Split on `## ` first. Each H2 is its own unit. **Do not pack two sections together** — citations need a real section name.
 3. If a section is still too large, drop to `### `, then blank-line paragraphs, then sentence boundaries.
 4. Adjacent paragraphs/sentences **do** pack greedily until they would exceed 500 characters (avoids a pile of 112-char embedding orphans; corpus paragraph median is 112).
 5. Character windows with 100-char overlap run only when no structural separator remains.
@@ -97,26 +101,26 @@ metadata:
   section:      Fair Wages and Remuneration
   version:      1.0
   status:       legacy            # current | legacy
-  source_url:   lab-planted-defect | https://investors.coforge.com/...
+  source_url:   synthetic-legacy-conflict | https://investors.coforge.com/...
   source_file:  human_rights_policy_v1.md
   chunk_type:   section | paragraph | ...
   chunk_index:  0
 ```
 
-`status` and `version` must survive into Chroma. That is how Part 6 proves we retrieved the **legacy** Human Rights policy, and how Part 7 cites sources.
+`status` and `version` must survive into Chroma so incident review can prove a **legacy** Human Rights hit, and so answers can cite sources.
 
-## 4. Embeddings and store (Part 2, after the splitter)
+## 4. Embeddings and store (next)
 
 | Piece | Decision | Why |
 |-------|----------|-----|
-| Model | `all-MiniLM-L6-v2` (384-d) | Lab-standard, CPU-friendly, cosine space matches Chroma default. Same family as the later MiniLM reranker. |
+| Model | `all-MiniLM-L6-v2` (384-d) | CPU-friendly default; cosine matches Chroma; same MiniLM family as the later reranker. |
 | Store | Chroma persistent client at `chroma/` | Gitignored, rebuildable from `data/raw`. |
 | Metric | Cosine | MiniLM embeddings are L2-normalized; cosine ≡ inner product. |
 | Query k | 5 in the minimal loop | Enough to surface both Human Rights versions plus a distractor (Supplier CoC also mentions leave). |
 
-The **minimal loop** does dense retrieval only. BM25 and RRF wait for Part 3.
+The **minimal retrieve loop** does dense retrieval only. BM25 and RRF wait until that loop is green.
 
-## 5. End-to-end pipeline (all parts)
+## 5. End-to-end pipeline
 
 ```mermaid
 flowchart TD
@@ -140,18 +144,18 @@ flowchart TD
   rrf --> rerank --> gen --> eval
 ```
 
-| Part | Module | Status |
-|------|--------|--------|
-| 1 | Corpus + planted Human Rights v1 | Done |
-| 2 | Chunk (hierarchical) + MiniLM + Chroma + `test_minimal_loop.py` | Chunker done; embed/index next |
-| 3 | Hybrid dense + BM25, RRF | Blocked on Part 2 test |
-| 4 | Cross-encoder rerank | After Part 3 |
+| Phase | Capability | Status |
+|-------|------------|--------|
+| 1 | Corpus + stale Human Rights v1 | Done |
+| 2 | Hierarchical chunk + MiniLM + Chroma + `test_minimal_loop.py` | Chunker done; embed/index next |
+| 3 | Hybrid dense + BM25, RRF | Blocked on retrieve-loop test |
+| 4 | Cross-encoder rerank | After hybrid |
 | 5 | 8+ queries, Recall@K, accuracy | After retrieve works |
-| 6 | Two-question debug of planted defect | After eval harness |
+| 6 | Two-question debug of stale policy | After eval harness |
 | 7 | Cite doc / section / version | Metadata already on chunks |
 | 8 | GitHub Actions | Last |
 
-## 6. Planted defect path (do not “fix” in Part 2)
+## 6. Stale-policy fixture (do not drop at ingest)
 
 Query: *How many Privilege Leave / PTO days do I get?*
 
@@ -159,14 +163,14 @@ Query: *How many Privilege Leave / PTO days do I get?*
 - Human Rights **v2 (current)** does **not** publish a day count; complaints go to `All.HR@coforge.com`.
 - Supplier Code of Conduct mentions leave for **suppliers**, not Coforge employees.
 
-Part 2 **must index both versions**. Filtering `status=legacy` would hide the defect the lab grades in Part 6.
+**Index both versions.** Filtering `status=legacy` hides the data-quality incident the eval harness must surface.
 
-Two-question debug (Part 6, not now):
+Two-question debug (later):
 
-1. Did we retrieve the right documents? (v1 should rank; that is a data bug, not a model bug.)
-2. Did the generator use the right one? (If it answers 15 days, it trusted a retired policy.)
+1. Did we retrieve the right documents? (v1 ranking is a corpus/index issue, not a model issue.)
+2. Did the generator use the right one? (Answering 15 days means it trusted a retired policy.)
 
-## 7. Planned modules (implement only after this doc)
+## 7. Modules
 
 ```
 src/rag_lab/
@@ -174,16 +178,16 @@ src/rag_lab/
   chunking.py      # static recursive hierarchical types (done)
   embeddings.py    # next: MiniLM encode
   index.py         # next: Chroma upsert / query
-  config.py        # add CHUNK_SIZE, CHUNK_OVERLAP, EMBED_MODEL
+  config.py        # CHUNK_SIZE, CHUNK_OVERLAP, EMBED_MODEL
 tests/
   test_chunking.py
-  test_minimal_loop.py   # Part 2 gate
+  test_minimal_loop.py   # retrieve-loop gate
 ```
 
 Do not add BM25, RRF, a reranker, or an LLM client in the same change.
 
-## 8. Screenshot milestones
+## 8. Evidence to capture
 
-1. `pytest -v tests/test_corpus.py` (Part 1 — already green).
-2. Chunk stats printed from a small script (count of chunks, max length ≤ 500).
-3. `pytest -v tests/test_minimal_loop.py` passing, plus a sample query that returns Human Rights v1 for a PTO question.
+1. `pytest -v tests/test_corpus.py` (already green).
+2. Chunk stats (count, max length ≤ 500).
+3. `pytest -v tests/test_minimal_loop.py` plus a PTO query that returns Human Rights v1.

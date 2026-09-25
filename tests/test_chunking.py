@@ -1,4 +1,4 @@
-"""Part 2: static recursive hierarchical chunking."""
+"""Hierarchical chunking: structural types, packing, and data-quality fixtures."""
 
 import pytest
 

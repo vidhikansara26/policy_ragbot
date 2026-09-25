@@ -1,20 +1,20 @@
 ---
-description: Testing and evaluation harness rules for the RAG lab
+description: Evaluation harness rules for the enterprise RAG platform
 globs: "tests/**/*.py"
 alwaysApply: false
 ---
 
 # RAG Tests
 
-- `tests/test_minimal_loop.py` is the Part 2 gate: load → chunk → embed → store → retrieve.
-  It must pass before hybrid search (Part 3) or reranking (Part 4) is added.
-- Part 5 harness: at least 8 parametrized queries, including ones that hit the planted
-  PTO v1/v2 conflict and ones on clean facts.
-- Measure Recall@K (K from config) and answer accuracy as separate assertions.
-- Tests must be deterministic: fixture corpus, temp ChromaDB dir (`tmp_path`), no shared state.
-- Tests that call a live LLM or download models get `@pytest.mark.integration`
-  so CI can run the fast suite with `-m "not integration"`.
-- Part 7: fail if any answer lacks source metadata (doc name, section, version).
+- `tests/test_minimal_loop.py` is the retrieve-loop gate: load → chunk → embed → store → query.
+  It must pass before hybrid search or reranking.
+- Evaluation suite: at least 8 parametrized queries, including the stale Human Rights v1/v2
+  PTO conflict and clean-fact cases (POSH, whistleblower, EHS).
+- Assert Recall@K (K from config) and answer accuracy separately.
+- Tests must be deterministic: fixture corpus, temp Chroma dir (`tmp_path`), no shared state.
+- Live LLM or model-download tests use `@pytest.mark.integration` so CI runs
+  `pytest -m "not integration"`.
+- Fail if any answer lacks source metadata (doc name, section, version).
 
 ```python
 @pytest.mark.parametrize("query,expected_doc", EVAL_CASES)

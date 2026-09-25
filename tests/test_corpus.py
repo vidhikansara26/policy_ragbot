@@ -1,4 +1,4 @@
-"""Part 1: Coforge policy corpus loads with required metadata and a planted v1 defect."""
+"""Corpus loader: versioned Coforge policies with a stale Human Rights v1 fixture."""
 
 from rag_lab import config
 from rag_lab.corpus import load_corpus

@@ -2,7 +2,8 @@
 
 Enterprise Retrieval-Augmented Generation over versioned Coforge policy documents.
 Built as incremental production capabilities. The dense retrieve loop gates
-hybrid search; hybrid search gates cross-encoder reranking.
+hybrid search; hybrid search gates cross-encoder reranking; reranking gates
+the evaluation harness.
 
 ## Delivery status
 
@@ -11,8 +12,8 @@ hybrid search; hybrid search gates cross-encoder reranking.
 | 1 | Versioned corpus + stale Human Rights v1 (PTO conflict) | Done |
 | 2 | Hierarchical chunking + MiniLM + Chroma + minimal retrieve | Done |
 | 3 | Hybrid search (dense + BM25) with Reciprocal Rank Fusion | Done |
-| 4 | Cross-encoder reranking (`ms-marco-MiniLM-L-6-v2`) | Next |
-| 5 | Eval harness: 8+ queries, Recall@K, answer accuracy | Pending |
+| 4 | Cross-encoder reranking (`ms-marco-MiniLM-L-6-v2`) | Done |
+| 5 | Eval harness: 8+ queries, Recall@K, answer accuracy | Next |
 | 6 | Data-quality diagnosis (2-Question Debugging Framework) | Pending |
 | 7 | Source attribution (doc, section, version) | Metadata on chunks |
 | 8 | GitHub Actions CI | Pending |

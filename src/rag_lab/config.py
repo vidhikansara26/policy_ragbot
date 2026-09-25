@@ -13,8 +13,15 @@ REQUIRED_METADATA_FIELDS: tuple[str, ...] = ("doc_name", "section", "version", "
 # Paragraph p90 in this corpus is 391 chars; 500 keeps typical clauses intact.
 CHUNK_SIZE: int = 500
 CHUNK_OVERLAP: int = 100
+# all-MiniLM-L6-v2 is 384-d and trained for cosine similarity.
+# L2-normalized vectors make cosine identical to the inner product.
 EMBED_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
+EMBED_DIM: int = 384
+EMBED_BATCH_SIZE: int = 32
+EMBED_NORMALIZE: bool = True
+EMBED_DEVICE: str = "cpu"
 CHROMA_COLLECTION: str = "coforge_policies"
+CHROMA_DISTANCE: str = "cosine"
 RETRIEVE_K: int = 5
 
 # Data-quality fixture: Human Rights v1 stays in the index on purpose.

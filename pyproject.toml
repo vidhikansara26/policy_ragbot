@@ -8,13 +8,19 @@ version = "0.1.0"
 description = "Enterprise RAG platform for versioned corporate policy retrieval"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "chromadb>=1.0",
+    "sentence-transformers>=3.0",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+rag_lab = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -31,3 +37,15 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
+
+[[tool.mypy.overrides]]
+module = [
+    "sentence_transformers",
+    "sentence_transformers.*",
+    "chromadb",
+    "chromadb.*",
+    "numpy",
+    "numpy.*",
+]
+ignore_missing_imports = true
+follow_imports = "skip"

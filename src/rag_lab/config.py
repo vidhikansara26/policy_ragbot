@@ -45,6 +45,25 @@ HYBRID_CANDIDATE_K: int = 20
 # whenever the candidate set changes. k=60 keeps rank 1 and rank 2 close.
 RRF_K: int = 60
 
+# MS MARCO passage ranker. A 6-layer MiniLM reads the query and the chunk in
+# one forward pass and emits a single relevance score. It is a different
+# checkpoint from the bi-encoder: all-MiniLM-L6-v2 never sees the pair together.
+RERANK_MODEL: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+RERANK_DEVICE: str = "cpu"
+# 32 covers the default fused pool in one CPU batch.
+RERANK_BATCH_SIZE: int = 32
+
+# How many fused hits the cross-encoder rescores. This matches the hybrid
+# candidate pool (HYBRID_CANDIDATE_K): fusion already kept these 20, and the
+# reranker exists to reorder that pool. Rescoring only RETRIEVE_K would shuffle
+# the five hits we were going to return and could not promote a chunk RRF
+# placed just outside that window. Rescoring the whole collection repeats work
+# on chunks both retrievers already left below the fusion cutoff. search()
+# still returns RETRIEVE_K hits; the other scores only order that window.
+# A caller who passes a larger k rescores max(k, RERANK_CANDIDATE_K) and
+# receives k.
+RERANK_CANDIDATE_K: int = 20
+
 # Data-quality fixture: Human Rights v1 stays in the index on purpose.
 # Public Coforge investor policies do not publish a PTO handbook; the stale v1
 # clause still answers "how many Privilege Leave / PTO days?" until diagnosis.

@@ -1,9 +1,9 @@
 # Policy RAG architecture
 
 Status: Corpus, hierarchical chunking, the dense retrieve loop (MiniLM +
-Chroma cosine), and hybrid search (BM25 + Reciprocal Rank Fusion) are in
-production code. Cross-encoder reranking stays blocked until the hybrid tests
-are green.
+Chroma cosine), hybrid search (BM25 + Reciprocal Rank Fusion), and
+cross-encoder reranking are in production code. The evaluation harness stays
+blocked until the rerank tests are green.
 
 Enterprise policy assistant over **versioned Coforge investor policies**, with a
 **known data-quality fixture** (stale Human Rights v1) so retrieval can surface
@@ -17,16 +17,17 @@ data/raw/*.md
     → ChromaDB persist       # done
     → dense retrieve         # minimal loop (gate, green)
     → BM25 + RRF             # hybrid search
-    → cross-encoder rerank   # next capability
+    → cross-encoder rerank   # fused top-20 rescored, top-5 returned
+    → eval harness           # next capability
     → generate + cite
     → GitHub Actions CI
 ```
 
-**Gate:** `tests/test_minimal_loop.py` is green. Cross-encoder rerank and CI stay off until `tests/test_hybrid.py` is green.
+**Gate:** `tests/test_minimal_loop.py` and `tests/test_hybrid.py` are green. The eval harness stays off until `tests/test_rerank.py` is green.
 
 ## 1. Pipeline slice
 
-The block above is the production path. Later phases add hybrid fusion, reranking, generation with citations, eval, and CI.
+The block above is the production path. Later phases add the evaluation harness, generation with citations, and CI.
 
 ## 2. Corpus facts (measured, not assumed)
 
@@ -148,6 +149,25 @@ Worked example with `RRF_K=60`. Document A is dense rank 1 (similarity 0.95, so 
 
 `RRF_K=60` keeps rank 1 and rank 2 close (`1/61` vs `1/62`). A bare `1/rank` would let a single first place dominate agreement between the two lists.
 
+## 4.2 Cross-encoder rerank (done)
+
+`RerankingRetriever` takes the fused list from hybrid search, scores each query–chunk pair with `cross-encoder/ms-marco-MiniLM-L-6-v2`, and sorts by that score.
+
+| Knob | Value | Role |
+|------|------:|------|
+| `RERANK_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Pair scorer. One relevance score per (query, chunk). Same MiniLM family as the bi-encoder, different checkpoint: the bi-encoder never sees the pair together. |
+| `RERANK_CANDIDATE_K` | 20 | Fused hits that are rescored. Matches `HYBRID_CANDIDATE_K`, the pool fusion already kept. |
+| `RETRIEVE_K` | 5 | Hits returned after the sort. Same answer window as dense and hybrid search. |
+| `RERANK_BATCH_SIZE` | 32 | One CPU batch covers the default pool of 20. |
+
+Twenty fused hits go into the cross-encoder. Five come out.
+
+The 20 are the fusion pool. Each retriever already returned a list of depth 20, and RRF kept the best 20 of that union. The cross-encoder's job is to reorder that pool using the query and the chunk text together. A chunk at fused rank 6 can be the passage that contains the answer; rescoring the pool lets it move into the five that callers see. Rescoring only those five would shuffle a list fusion had already truncated. Rescoring all ~105 chunks would run the transformer over passages both MiniLM and BM25 already ranked below the fusion cutoff. Twenty pairs fit in one CPU batch.
+
+The returned window stays 5 so the eval harness can measure Recall@K at the same K as the earlier retrieve stages. The other 15 scores exist only to order that window. A caller who passes a larger `k` rescores `max(k, 20)` and receives `k`.
+
+The model score replaces the order. It is not added to `rrf_score`. RRF values sit near 0.03; an MS MARCO score is often several units wide, so a sum would make the logit the whole decision. Scores are not min-max scaled inside the batch either: that would pin the worst pair to 0 whenever the pool changes. `status=legacy` is still not a filter. Every fused hit is scored, then the list is cut.
+
 ## 5. End-to-end pipeline
 
 ```mermaid
@@ -177,8 +197,8 @@ flowchart TD
 | 1 | Corpus + stale Human Rights v1 | Done |
 | 2 | Hierarchical chunk + MiniLM + Chroma + `test_minimal_loop.py` | Done |
 | 3 | Hybrid dense + BM25, RRF | Done |
-| 4 | Cross-encoder rerank (`cross-encoder/ms-marco-MiniLM-L-6-v2`) | Next |
-| 5 | 8+ queries, Recall@K, accuracy | After retrieve works |
+| 4 | Cross-encoder rerank (`cross-encoder/ms-marco-MiniLM-L-6-v2`) | Done |
+| 5 | 8+ queries, Recall@K, accuracy | Next |
 | 6 | Two-question debug of stale policy | After eval harness |
 | 7 | Cite doc / section / version | Metadata already on chunks |
 | 8 | GitHub Actions | Last |
@@ -208,14 +228,16 @@ src/rag_lab/
   index.py         # Chroma upsert / query (done)
   bm25.py          # Okapi BM25 (done)
   hybrid.py        # Reciprocal Rank Fusion (done)
-  config.py        # CHUNK_SIZE, RRF_K, BM25_K1, HYBRID_CANDIDATE_K
+  rerank.py        # MS MARCO MiniLM cross-encoder (done)
+  config.py        # CHUNK_SIZE, RRF_K, RERANK_CANDIDATE_K, RETRIEVE_K
 tests/
   test_chunking.py
   test_minimal_loop.py   # retrieve-loop gate
   test_hybrid.py         # dense + BM25 + RRF
+  test_rerank.py         # cross-encoder reorder of the fused pool
 ```
 
-Do not add a cross-encoder, an LLM client, or CI in the hybrid-search change.
+Do not add an evaluation harness, an LLM client, or CI in the rerank change.
 
 ## 8. Evidence to capture
 
@@ -223,3 +245,4 @@ Do not add a cross-encoder, an LLM client, or CI in the hybrid-search change.
 2. Chunk stats (count, max length ≤ 500).
 3. `pytest -v tests/test_minimal_loop.py` plus a PTO query that returns Human Rights v1.
 4. `pytest -v tests/test_hybrid.py` — RRF order, BM25 rank of the legacy 15-day clause, and the fused PTO query.
+5. `pytest -v tests/test_rerank.py` — fake-scorer reorder of the fused pool, and a PTO query that still returns Human Rights v1 after the cross-encoder.

@@ -1,7 +1,8 @@
 # Policy RAG architecture
 
-Status: Corpus and hierarchical chunking are in production code. This document
-locks ingest and retrieve-loop design before MiniLM + Chroma.
+Status: Corpus, hierarchical chunking, and the dense retrieve loop (MiniLM +
+Chroma cosine) are in production code. Hybrid search stays blocked until
+`tests/test_minimal_loop.py` is green.
 
 Enterprise policy assistant over **versioned Coforge investor policies**, with a
 **known data-quality fixture** (stale Human Rights v1) so retrieval can surface
@@ -11,8 +12,8 @@ the wrong policy version — a data incident, not a model failure.
 data/raw/*.md
     → load_corpus()          # done
     → chunk_document()       # done
-    → embed MiniLM           # next
-    → ChromaDB persist       # next
+    → embed MiniLM           # done
+    → ChromaDB persist       # done
     → dense retrieve         # minimal loop (gate)
     → BM25 + RRF             # blocked until test_minimal_loop.py
     → cross-encoder rerank
@@ -109,7 +110,7 @@ metadata:
 
 `status` and `version` must survive into Chroma so incident review can prove a **legacy** Human Rights hit, and so answers can cite sources.
 
-## 4. Embeddings and store (next)
+## 4. Embeddings and store (done)
 
 | Piece | Decision | Why |
 |-------|----------|-----|
@@ -147,7 +148,7 @@ flowchart TD
 | Phase | Capability | Status |
 |-------|------------|--------|
 | 1 | Corpus + stale Human Rights v1 | Done |
-| 2 | Hierarchical chunk + MiniLM + Chroma + `test_minimal_loop.py` | Chunker done; embed/index next |
+| 2 | Hierarchical chunk + MiniLM + Chroma + `test_minimal_loop.py` | Done |
 | 3 | Hybrid dense + BM25, RRF | Blocked on retrieve-loop test |
 | 4 | Cross-encoder rerank | After hybrid |
 | 5 | 8+ queries, Recall@K, accuracy | After retrieve works |
@@ -176,8 +177,8 @@ Two-question debug (later):
 src/rag_lab/
   corpus.py        # exists
   chunking.py      # static recursive hierarchical types (done)
-  embeddings.py    # next: MiniLM encode
-  index.py         # next: Chroma upsert / query
+  embeddings.py    # MiniLM encode (done)
+  index.py         # Chroma upsert / query (done)
   config.py        # CHUNK_SIZE, CHUNK_OVERLAP, EMBED_MODEL
 tests/
   test_chunking.py

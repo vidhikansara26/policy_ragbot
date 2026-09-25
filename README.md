@@ -9,7 +9,7 @@ hybrid search or reranking.
 | Phase | Capability | Status |
 |-------|------------|--------|
 | 1 | Versioned corpus + stale Human Rights v1 (PTO conflict) | Done |
-| 2 | Hierarchical chunking + MiniLM + Chroma + minimal retrieve | Chunking done; index next |
+| 2 | Hierarchical chunking + MiniLM + Chroma + minimal retrieve | Done |
 | 3 | Hybrid search (dense + BM25) with Reciprocal Rank Fusion | Blocked on retrieve loop |
 | 4 | Cross-encoder reranking (`ms-marco-MiniLM-L-6-v2`) | Pending |
 | 5 | Eval harness: 8+ queries, Recall@K, answer accuracy | Pending |

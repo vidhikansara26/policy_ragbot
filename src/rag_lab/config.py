@@ -24,6 +24,27 @@ CHROMA_COLLECTION: str = "coforge_policies"
 CHROMA_DISTANCE: str = "cosine"
 RETRIEVE_K: int = 5
 
+# Okapi BM25 (Robertson / Sparck Jones). k1 saturates repeated terms; b pulls
+# long chunks toward the corpus average length. 1.5 and 0.75 are the usual
+# defaults. There is no stopword list: "not" and "days" separate the stale
+# 15-day Privilege Leave clause from the current "does not set a numeric
+# entitlement" wording.
+BM25_K1: float = 1.5
+BM25_B: float = 0.75
+
+# Minimum depth of each ranked list before fusion. Wider than RETRIEVE_K so a
+# lexical hit just outside the dense top-5 still enters RRF. A search that
+# asks for more than this fetches max(k, HYBRID_CANDIDATE_K) from each list.
+HYBRID_CANDIDATE_K: int = 20
+
+# Cormack, Clarke, and Buettcher, SIGIR 2009. Reciprocal Rank Fusion uses
+# 1 / (RRF_K + rank) and ignores raw scores. Cosine distance sits in [0, 2]
+# while BM25 is an unbounded idf sum, so adding the two numbers lets the BM25
+# magnitude swamp a stronger dense rank. Min-max rescaling a short candidate
+# list is just as brittle: the worst hit becomes 0 and the best becomes 1
+# whenever the candidate set changes. k=60 keeps rank 1 and rank 2 close.
+RRF_K: int = 60
+
 # Data-quality fixture: Human Rights v1 stays in the index on purpose.
 # Public Coforge investor policies do not publish a PTO handbook; the stale v1
 # clause still answers "how many Privilege Leave / PTO days?" until diagnosis.

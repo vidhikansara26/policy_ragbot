@@ -64,6 +64,16 @@ RERANK_BATCH_SIZE: int = 32
 # receives k.
 RERANK_CANDIDATE_K: int = 20
 
+# Recall@K uses the window search() returns after rerank, which is
+# RETRIEVE_K (5). RERANK_CANDIDATE_K (20) is only the pool that gets
+# rescored. A passage the cross-encoder left outside those five never
+# reaches the extractive answer, so Recall at 20 would credit hits the
+# caller does not see. Answer accuracy is a separate check on the cited
+# top passage: a gold chunk at rank 3 counts for recall and still fails
+# accuracy. Per-query recall is 0 or 1 because each question has one
+# supporting passage; the harness mean is the average of those values.
+EVAL_K: int = RETRIEVE_K
+
 # Data-quality fixture: Human Rights v1 stays in the index on purpose.
 # Public Coforge investor policies do not publish a PTO handbook; the stale v1
 # clause still answers "how many Privilege Leave / PTO days?" until diagnosis.

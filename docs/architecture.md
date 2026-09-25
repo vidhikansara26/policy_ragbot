@@ -1,8 +1,9 @@
 # Policy RAG architecture
 
-Status: Corpus, hierarchical chunking, and the dense retrieve loop (MiniLM +
-Chroma cosine) are in production code. Hybrid search stays blocked until
-`tests/test_minimal_loop.py` is green.
+Status: Corpus, hierarchical chunking, the dense retrieve loop (MiniLM +
+Chroma cosine), and hybrid search (BM25 + Reciprocal Rank Fusion) are in
+production code. Cross-encoder reranking stays blocked until the hybrid tests
+are green.
 
 Enterprise policy assistant over **versioned Coforge investor policies**, with a
 **known data-quality fixture** (stale Human Rights v1) so retrieval can surface
@@ -14,14 +15,14 @@ data/raw/*.md
     → chunk_document()       # done
     → embed MiniLM           # done
     → ChromaDB persist       # done
-    → dense retrieve         # minimal loop (gate)
-    → BM25 + RRF             # blocked until test_minimal_loop.py
-    → cross-encoder rerank
+    → dense retrieve         # minimal loop (gate, green)
+    → BM25 + RRF             # hybrid search
+    → cross-encoder rerank   # next capability
     → generate + cite
     → GitHub Actions CI
 ```
 
-**Gate:** hybrid search, reranking, and CI stay off until `tests/test_minimal_loop.py` is green (load → chunk → embed → store → retrieve).
+**Gate:** `tests/test_minimal_loop.py` is green. Cross-encoder rerank and CI stay off until `tests/test_hybrid.py` is green.
 
 ## 1. Pipeline slice
 
@@ -119,7 +120,33 @@ metadata:
 | Metric | Cosine | MiniLM embeddings are L2-normalized; cosine ≡ inner product. |
 | Query k | 5 in the minimal loop | Enough to surface both Human Rights versions plus a distractor (Supplier CoC also mentions leave). |
 
-The **minimal retrieve loop** does dense retrieval only. BM25 and RRF wait until that loop is green.
+The **minimal retrieve loop** does dense retrieval only. Hybrid search adds BM25 and RRF on top of that loop.
+
+## 4.1 Hybrid search (done)
+
+Dense MiniLM (`PolicyIndex.search`) and in-memory Okapi BM25 each return a best-first list of depth `max(k, HYBRID_CANDIDATE_K)` (candidate depth 20, final `RETRIEVE_K` 5). Reciprocal Rank Fusion scores every chunk as:
+
+```
+score(d) = Σ 1 / (RRF_K + rank_list(d))
+```
+
+`RRF_K` is 60. Rank is 1-based. A chunk absent from a list adds nothing for that list. `status=legacy` is still not a filter.
+
+BM25 uses `k1=1.5` and `b=0.75`. Tokens are lowercase alphanumeric runs, with no stopword list, so `15`, `days`, and `not` stay available. The postings live in memory and are rebuilt from the persisted Chroma rows: the corpus is about 32 KB, and a second on-disk index would only drift from the vectors.
+
+### Why RRF instead of adding raw scores
+
+Cosine distance for L2-normalized MiniLM vectors sits in `[0, 2]`. BM25 is an idf-weighted sum with no shared ceiling. Those numbers cannot be added.
+
+Worked example with `RRF_K=60`. Document A is dense rank 1 (similarity 0.95, so distance 0.05) and BM25 rank 2 (score 1.0). Document B is dense rank 4 (similarity 0.10) and BM25 rank 1 (score 30).
+
+| Fusion | A | B | Winner |
+|--------|--:|--:|--------|
+| `(1 - distance) + BM25` | 0.95 + 1 = 1.95 | 0.10 + 30 = 30.1 | B, because the lexical magnitude swamps the dense hit |
+| Min-max each list, then add | Depends on whichever other candidates happen to be in the list; the worst hit is forced to 0 and the best to 1 | Same | Unstable across queries |
+| RRF | 1/61 + 1/62 ≈ 0.0325 | 1/64 + 1/61 ≈ 0.0320 | A, because both retrievers rank it near the top |
+
+`RRF_K=60` keeps rank 1 and rank 2 close (`1/61` vs `1/62`). A bare `1/rank` would let a single first place dominate agreement between the two lists.
 
 ## 5. End-to-end pipeline
 
@@ -139,7 +166,7 @@ flowchart TD
 
   raw --> load --> chunk --> embed --> chroma
   chroma --> dense
-  chunk --> bm25
+  chroma --> bm25
   dense --> rrf
   bm25 --> rrf
   rrf --> rerank --> gen --> eval
@@ -149,8 +176,8 @@ flowchart TD
 |-------|------------|--------|
 | 1 | Corpus + stale Human Rights v1 | Done |
 | 2 | Hierarchical chunk + MiniLM + Chroma + `test_minimal_loop.py` | Done |
-| 3 | Hybrid dense + BM25, RRF | Blocked on retrieve-loop test |
-| 4 | Cross-encoder rerank | After hybrid |
+| 3 | Hybrid dense + BM25, RRF | Done |
+| 4 | Cross-encoder rerank (`cross-encoder/ms-marco-MiniLM-L-6-v2`) | Next |
 | 5 | 8+ queries, Recall@K, accuracy | After retrieve works |
 | 6 | Two-question debug of stale policy | After eval harness |
 | 7 | Cite doc / section / version | Metadata already on chunks |
@@ -179,16 +206,20 @@ src/rag_lab/
   chunking.py      # static recursive hierarchical types (done)
   embeddings.py    # MiniLM encode (done)
   index.py         # Chroma upsert / query (done)
-  config.py        # CHUNK_SIZE, CHUNK_OVERLAP, EMBED_MODEL
+  bm25.py          # Okapi BM25 (done)
+  hybrid.py        # Reciprocal Rank Fusion (done)
+  config.py        # CHUNK_SIZE, RRF_K, BM25_K1, HYBRID_CANDIDATE_K
 tests/
   test_chunking.py
   test_minimal_loop.py   # retrieve-loop gate
+  test_hybrid.py         # dense + BM25 + RRF
 ```
 
-Do not add BM25, RRF, a reranker, or an LLM client in the same change.
+Do not add a cross-encoder, an LLM client, or CI in the hybrid-search change.
 
 ## 8. Evidence to capture
 
 1. `pytest -v tests/test_corpus.py` (already green).
 2. Chunk stats (count, max length ≤ 500).
 3. `pytest -v tests/test_minimal_loop.py` plus a PTO query that returns Human Rights v1.
+4. `pytest -v tests/test_hybrid.py` — RRF order, BM25 rank of the legacy 15-day clause, and the fused PTO query.

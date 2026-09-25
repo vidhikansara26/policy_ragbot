@@ -200,20 +200,31 @@ class PolicyIndex:
             )
         except Exception as exc:
             raise RetrievalError(f"Failed to fetch chunk {chunk_id}") from exc
-        payload = _as_mapping(result, failure=f"Failed to fetch chunk {chunk_id}")
-        ids: list[Any] = list(payload.get("ids") or [])
-        documents: list[Any] = list(payload.get("documents") or [])
-        metadatas: list[Any] = list(payload.get("metadatas") or [])
-        if not ids:
+        stored = _stored_chunks(result, failure=f"Failed to fetch chunk {chunk_id}")
+        if not stored:
             raise RetrievalError(f"Chunk not found: {chunk_id}")
-        document = documents[0]
-        metadata = metadatas[0]
-        if not isinstance(document, str) or not isinstance(metadata, dict):
-            raise RetrievalError(f"Chroma returned an incomplete record for {chunk_id}")
-        return StoredChunk(
-            chunk_id=str(ids[0]),
-            text=document,
-            metadata=_stringify_metadata(metadata),
+        if len(stored) != 1:
+            raise RetrievalError(f"Expected one chunk for {chunk_id}, got {len(stored)}")
+        return stored[0]
+
+    def list_chunks(self) -> list[StoredChunk]:
+        """Return every stored chunk, including ``status=legacy``.
+
+        Hybrid search rebuilds its in-memory BM25 index from this listing so
+        sparse stats stay aligned with the persisted collection.
+
+        Raises:
+            RetrievalError: If Chroma cannot read the collection.
+        """
+        try:
+            result: Any = self._collection.get(include=["documents", "metadatas"])
+        except Exception as exc:
+            raise RetrievalError(
+                f"Failed to list chunks in collection {self.collection_name}"
+            ) from exc
+        return _stored_chunks(
+            result,
+            failure=f"Failed to list chunks in collection {self.collection_name}",
         )
 
     def search(self, query: str, *, k: int = RETRIEVE_K) -> list[SearchHit]:
@@ -314,6 +325,33 @@ def _metadata_for_chroma(metadata: dict[str, str]) -> dict[str, str]:
 
 def _stringify_metadata(metadata: dict[Any, Any]) -> dict[str, str]:
     return {str(key): str(value) for key, value in metadata.items()}
+
+
+def _stored_chunks(result: Any, *, failure: str) -> list[StoredChunk]:
+    payload = _as_mapping(result, failure=failure)
+    ids: list[Any] = list(payload.get("ids") or [])
+    if not ids:
+        return []
+    documents_raw: Any = payload.get("documents")
+    metadatas_raw: Any = payload.get("metadatas")
+    if documents_raw is None or metadatas_raw is None:
+        raise RetrievalError(failure)
+    documents: list[Any] = list(documents_raw)
+    metadatas: list[Any] = list(metadatas_raw)
+    if not (len(ids) == len(documents) == len(metadatas)):
+        raise RetrievalError(failure)
+    stored: list[StoredChunk] = []
+    for chunk_id, document, metadata in zip(ids, documents, metadatas, strict=True):
+        if not isinstance(document, str) or not isinstance(metadata, dict):
+            raise RetrievalError(f"Chroma returned an incomplete record for {chunk_id}")
+        stored.append(
+            StoredChunk(
+                chunk_id=str(chunk_id),
+                text=document,
+                metadata=_stringify_metadata(metadata),
+            )
+        )
+    return stored
 
 
 def _as_mapping(result: Any, *, failure: str) -> dict[str, Any]:

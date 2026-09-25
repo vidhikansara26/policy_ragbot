@@ -1,8 +1,8 @@
 # Policy RAG Platform
 
 Enterprise Retrieval-Augmented Generation over versioned Coforge policy documents.
-Built as incremental production capabilities with a hard retrieve-loop gate before
-hybrid search or reranking.
+Built as incremental production capabilities. The dense retrieve loop gates
+hybrid search; hybrid search gates cross-encoder reranking.
 
 ## Delivery status
 
@@ -10,8 +10,8 @@ hybrid search or reranking.
 |-------|------------|--------|
 | 1 | Versioned corpus + stale Human Rights v1 (PTO conflict) | Done |
 | 2 | Hierarchical chunking + MiniLM + Chroma + minimal retrieve | Done |
-| 3 | Hybrid search (dense + BM25) with Reciprocal Rank Fusion | Blocked on retrieve loop |
-| 4 | Cross-encoder reranking (`ms-marco-MiniLM-L-6-v2`) | Pending |
+| 3 | Hybrid search (dense + BM25) with Reciprocal Rank Fusion | Done |
+| 4 | Cross-encoder reranking (`ms-marco-MiniLM-L-6-v2`) | Next |
 | 5 | Eval harness: 8+ queries, Recall@K, answer accuracy | Pending |
 | 6 | Data-quality diagnosis (2-Question Debugging Framework) | Pending |
 | 7 | Source attribution (doc, section, version) | Metadata on chunks |

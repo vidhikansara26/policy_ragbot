@@ -1,9 +1,9 @@
 # Policy RAG architecture
 
 Status: Corpus, hierarchical chunking, the dense retrieve loop (MiniLM +
-Chroma cosine), hybrid search (BM25 + Reciprocal Rank Fusion), and
-cross-encoder reranking are in production code. The evaluation harness stays
-blocked until the rerank tests are green.
+Chroma cosine), hybrid search (BM25 + Reciprocal Rank Fusion), cross-encoder
+reranking, and the evaluation harness are in production code. Incident
+diagnosis stays blocked until the eval tests are green.
 
 Enterprise policy assistant over **versioned Coforge investor policies**, with a
 **known data-quality fixture** (stale Human Rights v1) so retrieval can surface
@@ -18,16 +18,17 @@ data/raw/*.md
     → dense retrieve         # minimal loop (gate, green)
     → BM25 + RRF             # hybrid search
     → cross-encoder rerank   # fused top-20 rescored, top-5 returned
-    → eval harness           # next capability
+    → eval harness           # Recall@K and answer accuracy, K = 5
+    → 2-question diagnosis   # next capability
     → generate + cite
     → GitHub Actions CI
 ```
 
-**Gate:** `tests/test_minimal_loop.py` and `tests/test_hybrid.py` are green. The eval harness stays off until `tests/test_rerank.py` is green.
+**Gate:** `tests/test_minimal_loop.py`, `tests/test_hybrid.py`, and `tests/test_rerank.py` are green. Incident diagnosis stays off until `tests/test_eval.py` is green.
 
 ## 1. Pipeline slice
 
-The block above is the production path. Later phases add the evaluation harness, generation with citations, and CI.
+The block above is the production path. Later phases add incident diagnosis, generation with citations, and CI.
 
 ## 2. Corpus facts (measured, not assumed)
 
@@ -164,9 +165,28 @@ Twenty fused hits go into the cross-encoder. Five come out.
 
 The 20 are the fusion pool. Each retriever already returned a list of depth 20, and RRF kept the best 20 of that union. The cross-encoder's job is to reorder that pool using the query and the chunk text together. A chunk at fused rank 6 can be the passage that contains the answer; rescoring the pool lets it move into the five that callers see. Rescoring only those five would shuffle a list fusion had already truncated. Rescoring all ~105 chunks would run the transformer over passages both MiniLM and BM25 already ranked below the fusion cutoff. Twenty pairs fit in one CPU batch.
 
-The returned window stays 5 so the eval harness can measure Recall@K at the same K as the earlier retrieve stages. The other 15 scores exist only to order that window. A caller who passes a larger `k` rescores `max(k, 20)` and receives `k`.
+The returned window stays 5 so the eval harness measures Recall@K at the same K the caller receives. The other 15 scores exist only to order that window. A caller who passes a larger `k` rescores `max(k, 20)` and receives `k`.
 
 The model score replaces the order. It is not added to `rrf_score`. RRF values sit near 0.03; an MS MARCO score is often several units wide, so a sum would make the logit the whole decision. Scores are not min-max scaled inside the batch either: that would pin the worst pair to 0 whenever the pool changes. `status=legacy` is still not a filter. Every fused hit is scored, then the list is cut.
+
+## 4.3 Evaluation harness (done)
+
+`evaluate` runs the production query set through `RerankingRetriever` and records two checks. They are not folded into one score.
+
+| Check | What it measures | K / row |
+|-------|------------------|---------|
+| Recall@K | The supporting passage is anywhere in the returned window | `EVAL_K` = `RETRIEVE_K` = 5 |
+| Answer accuracy | The rank-1 passage contains the gold span and cites its doc name, section, version, and status | Rank 1 only |
+
+K is 5 because that is the window `search` returns. The cross-encoder rescores 20 fused hits so it can promote a passage into those five. A hit it then leaves at rank 6 is not something the caller sees. Recall at 20 would count that discarded passage as a success. Each question has one supporting passage, so per-query recall is 0 or 1. `mean_recall_at_k` is the average. `answer_accuracy` is the fraction of rank-1 answers that match. A gold passage at rank 3 is recall 1 and accuracy 0.
+
+The answer is extractive: the rank-1 chunk text, which must carry doc name, section, and version. No generator is called.
+
+Gold labels are verbatim spans. `bind_gold` requires the span to occur in exactly one file under `data/raw`, intact in one chunk section, and then copies `doc_name`, `section`, `version`, and `status` from that file. A span that is missing or ambiguous raises `EvalError`. The official set has 10 questions: the Human Rights v1/v2 Privilege Leave conflict, POSH (SHRC mailbox and the three-month complaint window), whistleblower (channel and acknowledgement), EHS (net zero and the annual committee review), modern-slavery training, and Independent Director tenure.
+
+`status=legacy` is not filtered while binding gold or while scoring the window. The PTO question's supporting passage is Human Rights Policy v1, section "3. Fair Wages and Remuneration", the 15-day clause. When that passage is inside the five, the row is labeled `data_quality_fixture`. Retrieving the planted clause is the incident the index is built to surface, not a failed retrieval. The row still counts toward both means. Answer accuracy on that row only says the top passage is the v1 clause from the file. It does not say 15 days is current policy. The current wording ("does not set a numeric Privilege Leave (PTO) entitlement") is a separate question against v2. Which of the two an answer should have used is the next diagnosis step.
+
+Offline tests boost a fake pair scorer and use `tmp_path`. The live MiniLM + cross-encoder run is `@pytest.mark.integration`.
 
 ## 5. End-to-end pipeline
 
@@ -189,7 +209,7 @@ flowchart TD
   chroma --> bm25
   dense --> rrf
   bm25 --> rrf
-  rrf --> rerank --> gen --> eval
+  rrf --> rerank --> eval --> gen
 ```
 
 | Phase | Capability | Status |
@@ -198,8 +218,8 @@ flowchart TD
 | 2 | Hierarchical chunk + MiniLM + Chroma + `test_minimal_loop.py` | Done |
 | 3 | Hybrid dense + BM25, RRF | Done |
 | 4 | Cross-encoder rerank (`cross-encoder/ms-marco-MiniLM-L-6-v2`) | Done |
-| 5 | 8+ queries, Recall@K, accuracy | Next |
-| 6 | Two-question debug of stale policy | After eval harness |
+| 5 | 8+ queries, Recall@K, accuracy | Done |
+| 6 | Two-question debug of stale policy | Next |
 | 7 | Cite doc / section / version | Metadata already on chunks |
 | 8 | GitHub Actions | Last |
 
@@ -229,15 +249,19 @@ src/rag_lab/
   bm25.py          # Okapi BM25 (done)
   hybrid.py        # Reciprocal Rank Fusion (done)
   rerank.py        # MS MARCO MiniLM cross-encoder (done)
-  config.py        # CHUNK_SIZE, RRF_K, RERANK_CANDIDATE_K, RETRIEVE_K
+  eval.py          # Recall@K and extractive answer accuracy (done)
+  cli.py           # `python -m rag_lab query|eval` (inspection entrypoint)
+  config.py        # CHUNK_SIZE, RRF_K, RERANK_CANDIDATE_K, EVAL_K
 tests/
   test_chunking.py
   test_minimal_loop.py   # retrieve-loop gate
   test_hybrid.py         # dense + BM25 + RRF
   test_rerank.py         # cross-encoder reorder of the fused pool
+  test_eval.py           # Recall@K and answer accuracy
+  test_cli.py            # query and eval command output
 ```
 
-Do not add an evaluation harness, an LLM client, or CI in the rerank change.
+The CLI prints the pipeline that is already here. It does not add a generator. Do not add the 2-question debugger or CI in the CLI change.
 
 ## 8. Evidence to capture
 
@@ -246,3 +270,5 @@ Do not add an evaluation harness, an LLM client, or CI in the rerank change.
 3. `pytest -v tests/test_minimal_loop.py` plus a PTO query that returns Human Rights v1.
 4. `pytest -v tests/test_hybrid.py` — RRF order, BM25 rank of the legacy 15-day clause, and the fused PTO query.
 5. `pytest -v tests/test_rerank.py` — fake-scorer reorder of the fused pool, and a PTO query that still returns Human Rights v1 after the cross-encoder.
+6. `pytest -v tests/test_eval.py -m "not integration"` — Recall@K and answer accuracy as separate checks. The PTO row records Human Rights v1 as the data-quality fixture.
+7. `pytest -v tests/test_cli.py` — `query` prints chunks and a cited answer; `eval` prints the two scores.

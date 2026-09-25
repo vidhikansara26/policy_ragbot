@@ -19,3 +19,7 @@ class IndexingError(RagLabError):
 
 class RetrievalError(RagLabError):
     """Raised when a search or rerank step fails."""
+
+
+class EvalError(RagLabError):
+    """Raised when an evaluation label, citation, or metric input is invalid."""

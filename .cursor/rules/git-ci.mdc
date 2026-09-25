@@ -1,0 +1,14 @@
+---
+description: Git workflow and GitHub Actions conventions for the RAG lab
+globs: ".github/**/*"
+alwaysApply: false
+---
+
+# Git and CI
+
+- Conventional commits scoped by lab part: `feat(part2): add chromadb ingestion`,
+  `test(part5): add recall@k harness`, `fix(part6): exclude legacy PTO v1`.
+- One feature branch per part (`part-2-chunking`), merged to `main` once tests pass.
+- Never commit `.venv/`, `.env`, `chroma/` persistence dirs, or model caches.
+- CI (Part 8 only): Python 3.11, cache pip, run `ruff check`, `mypy src`, and
+  `pytest -m "not integration"`. Fail the build on any error.

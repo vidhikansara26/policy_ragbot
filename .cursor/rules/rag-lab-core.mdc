@@ -1,0 +1,33 @@
+---
+description: RAG lab rubric, one-module-at-a-time workflow, verify-before-advance gate
+alwaysApply: true
+---
+
+# RAG Lab Core
+
+This is a university lab building a production-grade RAG pipeline from scratch.
+Implement ONLY the single part/module currently requested. Never generate Parts 1–8 at once.
+
+## Rubric map
+- Part 1: Synthetic corpus with a planted defect (PTO policy v1 legacy conflict)
+- Part 2: Chunking (document size/overlap rationale) + sentence-transformers + ChromaDB
+- Part 3: Hybrid search: dense vectors + sparse keyword (BM25), fused with Reciprocal Rank Fusion
+- Part 4: Cross-encoder reranking with `cross-encoder/ms-marco-MiniLM-L-6-v2`
+- Part 5: PyTest harness, 8+ queries, Recall@K and answer accuracy
+- Part 6: Diagnose the planted defect with the 2-Question Debugging Framework
+- Part 7: Source attribution in LLM output (doc name, section, version)
+- Part 8: GitHub Actions CI pipeline
+
+## Verification gate
+- Do not add hybrid search, reranking, or CI until `tests/test_minimal_loop.py` passes.
+- Each part must have a runnable test before moving on.
+- Remind the user to take terminal screenshots at milestones for the lab PDF.
+
+## Explain decisions
+Justify design choices inline in the response: chunk size/overlap, embedding model,
+RRF over raw score addition, reranker top-k, evaluation K.
+
+## Response ending
+End every implementation turn with:
+1. The exact terminal command to test the current step
+2. The next logical pipeline step (only one)

@@ -1,0 +1,37 @@
+---
+description: Production Python standards for the RAG lab source code
+globs: "**/*.py"
+alwaysApply: false
+---
+
+# Python Standards
+
+- Target Python 3.11+. Type hints on all public functions; code must pass `mypy --strict`.
+- Docstrings (Google style) on public modules, classes, and functions.
+- Use `pathlib.Path`, not string paths. Use `logging`, not `print`, in library code.
+- Tunables (chunk size, overlap, model IDs, K values, paths) live in `src/rag_lab/config.py`.
+- Raise specific exceptions from `src/rag_lab/exceptions.py` with context. Never bare `except:`.
+- Validate inputs at module boundaries; fail fast with clear messages.
+- No secrets in code. Read API keys from environment variables (`.env` is gitignored).
+- Format and lint with `ruff`.
+
+```python
+# BAD
+def chunk(text):
+    try:
+        return [text[i:i+300] for i in range(0, len(text), 250)]
+    except:
+        return []
+
+# GOOD
+def chunk_text(text: str, *, size: int, overlap: int) -> list[str]:
+    """Split text into overlapping character windows.
+
+    Raises:
+        ChunkingError: If size/overlap are invalid.
+    """
+    if size <= 0 or not 0 <= overlap < size:
+        raise ChunkingError(f"Invalid size={size}, overlap={overlap}")
+    step = size - overlap
+    return [text[i : i + size] for i in range(0, len(text), step)]
+```

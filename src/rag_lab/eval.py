@@ -55,6 +55,7 @@ from rag_lab.corpus import Document
 from rag_lab.exceptions import EvalError
 from rag_lab.generate import ABSTAIN_TEXT, TextGenerator, generate_answer, render_answer
 from rag_lab.rerank import RerankedHit
+from rag_lab.safety import screen_hits
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +123,7 @@ class AnswerCase:
     query_id: str
     question: str
     span: str = ""
+    key_facts: tuple[str, ...] = ()
     must_abstain: bool = False
     legacy_conflict: bool = False
 
@@ -130,9 +132,15 @@ class AnswerCase:
             raise EvalError("Answer case query_id is empty")
         if not self.question.strip():
             raise EvalError(f"Answer case {self.query_id!r} has an empty question")
+        if any(not phrase.strip() for phrase in self.key_facts):
+            raise EvalError(f"Answer case {self.query_id!r} has an empty key fact")
         if self.must_abstain:
             if self.span.strip():
                 raise EvalError(f"Answer case {self.query_id!r} abstains and cannot carry a span")
+            if self.key_facts:
+                raise EvalError(
+                    f"Answer case {self.query_id!r} abstains and cannot carry key facts"
+                )
             if self.legacy_conflict:
                 raise EvalError(
                     f"Answer case {self.query_id!r} abstains and cannot be a legacy conflict"
@@ -164,6 +172,7 @@ class AnswerGold:
     query_id: str
     question: str
     fact: str
+    key_facts: tuple[str, ...]
     must_abstain: bool
     legacy_conflict: bool
     doc_name: str
@@ -330,6 +339,27 @@ _EVAL_CASES: tuple[EvalCase, ...] = (
     ),
 )
 
+# What a correct published answer must state, per question. The retrieval span
+# stays verbatim source text for lineage; these are the load-bearing values a
+# grader would check. Requiring the whole source sentence instead would score
+# wording rather than correctness: "targets net zero by 2040" is a right answer
+# even though the policy writes "Net zero by 2040". Matching is normalized
+# (case, markdown emphasis, whitespace) and every phrase must be present.
+# bind_answer_gold rejects a phrase that is not in the bound source file, so
+# these cannot drift away from the corpus.
+_KEY_FACTS: dict[str, tuple[str, ...]] = {
+    "pto_privilege_leave": ("does not", "numeric"),
+    "pto_current_no_numeric_entitlement": ("does not", "numeric"),
+    "posh_shrc_email": ("shrc@coforge.com",),
+    "posh_complaint_deadline": ("three months",),
+    "whistleblower_channel": ("whistleblower@coforge.com",),
+    "whistleblower_acknowledgement": ("5 working days",),
+    "ehs_net_zero": ("net zero", "2040"),
+    "ehs_governance_review": ("EHS Committee", "annual"),
+    "modern_slavery_training_pass_rate": ("80%",),
+    "nomination_independent_director_terms": ("two consecutive terms", "5 years"),
+}
+
 # Generation gold for the same Privilege Leave question. Retrieval keeps the
 # v1 day-count span. This span is the current policy and binds to v2 only.
 _NO_NUMERIC_FACT = "does not set a numeric Privilege Leave (PTO) entitlement"
@@ -343,8 +373,17 @@ _CEO_QUESTION = "What is the personal mobile number of the Coforge CEO?"
 _UNGROUNDED_REFUSAL = ABSTAIN_TEXT
 _LEGACY_CONFLICT_MARK = " (legacy conflict)"
 _SECTION_NUMBER_PREFIX = re.compile(r"^\d+\.\s+")
-_PHONE_DIGITS = re.compile(r"\d{7,}")
 _NONE_SOURCE = "- (none)"
+# Fact matching ignores presentation. The corpus bolds its figures and a model
+# does not, so emphasis, case, and line wrapping must not decide a score.
+_MARKDOWN_EMPHASIS = re.compile(r"\*{1,3}|_{2}|`")
+_WHITESPACE = re.compile(r"\s+")
+# Two or more digits: years, percentages, day counts, and phone numbers, but not
+# the single-digit section and version numbers an answer may cite about itself.
+_WIDE_NUMBER = re.compile(r"\d[\d,.]*\d")
+_EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+# Metadata an answer may quote about its own source without inventing anything.
+_ATTRIBUTION_FIELDS: tuple[str, ...] = ("doc_name", "section", "version")
 
 
 def evaluation_cases() -> tuple[EvalCase, ...]:
@@ -378,12 +417,14 @@ def answer_cases() -> tuple[AnswerCase, ...]:
     """
     rows: list[AnswerCase] = []
     for case in _EVAL_CASES:
+        key_facts = _KEY_FACTS.get(case.query_id, ())
         if case.query_id == "pto_privilege_leave":
             rows.append(
                 AnswerCase(
                     query_id=case.query_id,
                     question=case.question,
                     span=_NO_NUMERIC_FACT,
+                    key_facts=key_facts,
                     legacy_conflict=True,
                 )
             )
@@ -393,6 +434,7 @@ def answer_cases() -> tuple[AnswerCase, ...]:
                     query_id=case.query_id,
                     question=case.question,
                     span=case.span,
+                    key_facts=key_facts,
                 )
             )
     rows.extend(
@@ -465,6 +507,7 @@ def bind_answer_gold(
                     query_id=case.query_id,
                     question=case.question,
                     fact="",
+                    key_facts=(),
                     must_abstain=True,
                     legacy_conflict=False,
                     doc_name="",
@@ -483,11 +526,13 @@ def bind_answer_gold(
             raise EvalError(
                 f"{case.query_id!r} legacy conflict bound status={passage.status}, expected current"
             )
+        key_facts = _bind_key_facts(case, documents)
         bound.append(
             AnswerGold(
                 query_id=case.query_id,
                 question=case.question,
                 fact=_plain(case.span),
+                key_facts=key_facts,
                 must_abstain=False,
                 legacy_conflict=case.legacy_conflict,
                 doc_name=passage.doc_name,
@@ -498,6 +543,27 @@ def bind_answer_gold(
             )
         )
     return tuple(bound)
+
+
+def _bind_key_facts(
+    case: AnswerCase,
+    documents: Sequence[Document],
+) -> tuple[str, ...]:
+    """Return the phrases a published answer must state, defaulting to the span.
+
+    Every phrase must appear in some source document, so the expected answer
+    can never require wording the corpus does not contain.
+
+    Raises:
+        EvalError: If a key fact is absent from every source document.
+    """
+    if not case.key_facts:
+        return (_plain(case.span),)
+    corpus = _normalized("\n".join(document.body for document in documents))
+    missing = [phrase for phrase in case.key_facts if _normalized(phrase) not in corpus]
+    if missing:
+        raise EvalError(f"{case.query_id!r} key facts are not in any source file: {missing}")
+    return tuple(case.key_facts)
 
 
 def bind_gold(
@@ -879,6 +945,11 @@ def _plain(text: str) -> str:
     return text.replace("**", "").strip()
 
 
+def _normalized(text: str) -> str:
+    """Casefold and drop markdown emphasis and line wrapping for fact matching."""
+    return _WHITESPACE.sub(" ", _MARKDOWN_EMPHASIS.sub("", text)).strip().casefold()
+
+
 def _fraction(flags: Sequence[bool], *, label: str) -> float:
     if not flags:
         raise EvalError(f"No rows to score {label}")
@@ -935,43 +1006,73 @@ def _score_answer(
 
 
 def _key_fact(gold: AnswerGold, prose: str) -> bool:
-    """Required fact is present, or the row correctly abstains."""
-    if gold.must_abstain:
-        return prose == _UNGROUNDED_REFUSAL
-    plain = _plain(prose)
-    planted = f"{LEGACY_PTO_DAYS} days"
-    if gold.fact == _NO_NUMERIC_FACT and planted in prose:
-        return False
-    if gold.fact in plain:
-        return True
-    return gold.fact == _NO_NUMERIC_FACT and _GUARD_PTO_FACT in plain
+    """Every required fact is stated, or the row correctly abstains.
 
-
-def _current_text(hits: Sequence[RerankedHit]) -> str:
-    return _plain(
-        "\n".join(hit.text for hit in hits if hit.metadata.get("status", "").strip() == "current")
-    )
-
-
-def _grounded(gold: AnswerGold, prose: str, hits: Sequence[RerankedHit]) -> bool:
-    """Unsupported questions pass only by abstaining. Supported claims must be in current chunks."""
+    Matching is normalized, so a correct paraphrase counts. The planted day
+    count still fails the Privilege Leave row outright.
+    """
     if gold.must_abstain:
         return prose == _UNGROUNDED_REFUSAL
     if prose == _UNGROUNDED_REFUSAL:
         return False
-    current = _current_text(hits)
-    planted = f"{LEGACY_PTO_DAYS} days"
-    if planted in prose and planted not in current:
+    answer = _normalized(prose)
+    if gold.fact == _NO_NUMERIC_FACT and _normalized(f"{LEGACY_PTO_DAYS} days") in answer:
         return False
-    if _unsupported_digits(prose, current):
-        return False
-    if gold.fact == _NO_NUMERIC_FACT and _GUARD_PTO_FACT in prose and gold.fact in current:
+    if all(_normalized(phrase) in answer for phrase in gold.key_facts):
         return True
-    return gold.fact in current and gold.fact in _plain(prose)
+    return gold.fact == _NO_NUMERIC_FACT and _normalized(_GUARD_PTO_FACT) in answer
 
 
-def _unsupported_digits(prose: str, current: str) -> bool:
-    return any(number not in current for number in _PHONE_DIGITS.findall(prose))
+def _current_text(hits: Sequence[RerankedHit]) -> str:
+    return _plain("\n".join(hit.text for hit in _current_hits(hits)))
+
+
+def _current_hits(hits: Sequence[RerankedHit]) -> list[RerankedHit]:
+    return [hit for hit in hits if hit.metadata.get("status", "").strip() == "current"]
+
+
+def _supported_text(hits: Sequence[RerankedHit]) -> str:
+    """Current chunk bodies plus the attribution those chunks carry.
+
+    An answer may name the document, section, and version it was given, so
+    ``version 2.0`` and ``section 5`` are supported even though the figures
+    live in metadata rather than in the passage body. Restricting support to
+    bodies alone would score an answer as ungrounded for citing itself.
+    """
+    parts = [_current_text(hits)]
+    for hit in _current_hits(hits):
+        parts.extend(hit.metadata.get(field, "") for field in _ATTRIBUTION_FIELDS)
+    return "\n".join(part for part in parts if part)
+
+
+def _grounded(gold: AnswerGold, prose: str, hits: Sequence[RerankedHit]) -> bool:
+    """Every value the answer states is in a current chunk. Not a re-check of key facts.
+
+    Key-fact accuracy asks whether the right answer was given; groundedness asks
+    whether anything was invented. An answer can be grounded and still miss the
+    point, so the two are scored from different evidence: this one compares the
+    answer's own identifiers and figures against the current passages.
+    """
+    if gold.must_abstain:
+        return prose == _UNGROUNDED_REFUSAL
+    if prose == _UNGROUNDED_REFUSAL:
+        return False
+    answer = _normalized(prose)
+    planted = _normalized(f"{LEGACY_PTO_DAYS} days")
+    if planted in answer and planted not in _normalized(_current_text(hits)):
+        return False
+    return not _unsupported_values(prose, _normalized(_supported_text(hits)))
+
+
+def _unsupported_values(prose: str, supported: str) -> bool:
+    """True when the answer states an email or a multi-digit figure nothing supports.
+
+    Emails and figures are where invention shows up: a plausible-looking mailbox
+    or a wrong year. Single digits are skipped because they are almost always a
+    section number the answer is quoting from its own citation.
+    """
+    values = _EMAIL.findall(prose) + _WIDE_NUMBER.findall(prose)
+    return any(_normalized(value) not in supported for value in values)
 
 
 def _section_key(section: str) -> str:
@@ -1018,10 +1119,17 @@ def _conflict_handled(
     sources: Sequence[str],
     hits: Sequence[RerankedHit],
 ) -> bool:
-    """Privilege Leave must cite v2 and flag v1. Any other row must not invent that flag."""
+    """Privilege Leave must cite v2 and flag v1. Any other row must not invent that flag.
+
+    Scored against the screened window, not the retrieved one. A passage dropped
+    below the relevance floor never reaches the prompt and cannot be cited, so
+    requiring a mark for it would fail an answer for a citation it had no way to
+    make.
+    """
+    available = screen_hits(gold.question, hits).hits
     if gold.legacy_conflict:
-        return _pto_conflict(gold, prose, sources, hits)
-    return _window_conflict(sources, hits)
+        return _pto_conflict(gold, prose, sources, available)
+    return _window_conflict(sources, available)
 
 
 def _pto_conflict(

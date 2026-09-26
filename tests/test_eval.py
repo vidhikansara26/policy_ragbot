@@ -875,6 +875,7 @@ def test_invented_phone_number_is_not_published(tmp_path: Path) -> None:
 
 
 @pytest.mark.integration
+@pytest.mark.llm
 def test_live_generator_pto_conflict_row() -> None:
     """One live answer. Skip when OpenAI is not configured."""
     if not os.environ.get(config.LLM_API_KEY_ENV, "").strip():

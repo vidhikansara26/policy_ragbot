@@ -18,6 +18,7 @@ from rag_lab.cli import Pipeline, build_pipeline, main, render_query
 from rag_lab.corpus import load_corpus
 from rag_lab.eval import answer_cases, bind_answer_gold, bind_gold, evaluation_cases
 from rag_lab.exceptions import EvalError
+from rag_lab.generate import TextGenerator
 from rag_lab.hybrid import HybridRetriever
 from rag_lab.index import PolicyIndex
 from rag_lab.rerank import RerankedHit, RerankingRetriever
@@ -143,6 +144,51 @@ def test_eval_command_prints_recall_and_accuracy_separately(
     assert "posh_shrc_email  recall=1  accurate=1  hit" in output
     assert "whistleblower_channel  recall=1  accurate=1  hit" in output
     assert "ehs_net_zero  recall=1  accurate=1  hit" in output
+
+
+def test_eval_writes_a_json_record_and_can_skip_generation(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    record = tmp_path / "eval" / "record.json"
+
+    def boom() -> TextGenerator:
+        raise AssertionError("generator must not be built on --retrieval-only")
+
+    code = main(
+        ["eval", "--retrieval-only", "--output", str(record)],
+        opener=_opener(tmp_path / "store"),
+        generator_factory=boom,
+    )
+    captured = capsys.readouterr()
+    assert code == 0
+    assert "recall_at_k=1.000" in captured.out
+    assert "generated_key_fact=" not in captured.out
+    payload = json.loads(record.read_text(encoding="utf-8"))
+    assert payload["generated"] is None
+    retrieval = payload["retrieval"]
+    assert retrieval["recall_at_k"] == 1.0
+    assert retrieval["extractive_answer_accuracy"] == 1.0
+    ids = [row["query_id"] for row in retrieval["results"]]
+    assert "pto_privilege_leave" in ids
+    fixture = next(row for row in retrieval["results"] if row["query_id"] == "pto_privilege_leave")
+    assert fixture["retrieval_label"] == "data_quality_fixture"
+    assert fixture["cited"]["version"] == "1.0"
+
+    full = tmp_path / "eval" / "full.json"
+    code = main(
+        ["eval", "--output", str(full)],
+        opener=_opener(tmp_path / "store2"),
+        generator_factory=_FactGenerator,
+    )
+    assert code == 0
+    payload = json.loads(full.read_text(encoding="utf-8"))
+    generated = payload["generated"]
+    assert generated is not None
+    assert generated["generated_key_fact"] == 1.0
+    assert generated["citation_complete"] == 1.0
+    assert generated["groundedness"] == 1.0
+    assert generated["conflict_handling"] == 1.0
 
 
 def test_query_without_tokens_fails(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

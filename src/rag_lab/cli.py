@@ -16,10 +16,12 @@ window. Citations are built in code, including a legacy-conflict mark when
 current and legacy of the same policy disagree. ``query`` stays extractive.
 
 ``eval`` runs the extractive pipeline over the production question set and
-prints Recall@K and extractive answer accuracy on separate lines. It then
-calls :func:`~rag_lab.eval.evaluate_answers` and prints key-fact accuracy,
+prints Recall@K and extractive answer accuracy on separate lines. Unless
+``--retrieval-only`` is set, it then calls
+:func:`~rag_lab.eval.evaluate_answers` and prints key-fact accuracy,
 citation completeness, groundedness, and conflict handling. Those four
-lines are not Recall@K. K is ``EVAL_K``. The Privilege Leave retrieval row
+lines are not Recall@K. ``--output`` writes the same numbers as JSON so CI
+can upload a record. K is ``EVAL_K``. The Privilege Leave retrieval row
 is labeled ``data_quality_fixture`` when Human Rights Policy v1 is in the
 window. Extractive accuracy on that row still means the rank-1 chunk is v1.
 
@@ -49,6 +51,7 @@ from rag_lab.eval import (
     evaluate_answers,
     evaluate_retrieval,
     evaluation_cases,
+    write_eval_record,
 )
 from rag_lab.exceptions import DataLoadError, EvalError, RagLabError
 from rag_lab.generate import TextGenerator, generate_answer, generator_from_env, render_answer
@@ -315,18 +318,23 @@ def main(
             text = render_answer(generate_answer(question, hits, factory()))
         elif command == "eval":
             documents = pipeline.documents
-            factory = generator_factory or generator_from_env
             extractive = evaluate_retrieval(
                 pipeline.retriever,
                 bind_gold(evaluation_cases(), documents),
                 k=EVAL_K,
             )
-            generated = evaluate_answers(
-                pipeline.retriever,
-                bind_answer_gold(answer_cases(), documents),
-                factory(),
-                k=EVAL_K,
-            )
+            generated: AnswerEvalReport | None = None
+            if not bool(args.retrieval_only):
+                factory = generator_factory or generator_from_env
+                generated = evaluate_answers(
+                    pipeline.retriever,
+                    bind_answer_gold(answer_cases(), documents),
+                    factory(),
+                    k=EVAL_K,
+                )
+            output_path = args.output
+            if output_path is not None:
+                write_eval_record(Path(output_path), extractive, generated)
             text = render_eval(extractive, generated)
         else:
             sys.stderr.write(f"error: unknown command {command}\n")
@@ -383,12 +391,23 @@ def _parser() -> argparse.ArgumentParser:
         default=RETRIEVE_K,
         help=f"Chunks to pass to the generator (default: {RETRIEVE_K})",
     )
-    sub.add_parser(
+    eval_parser = sub.add_parser(
         "eval",
         help=(
             f"Print Recall@{EVAL_K}, extractive accuracy, and generated-answer "
             "scores for the production questions"
         ),
+    )
+    eval_parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Write the scoreboard as JSON to this path",
+    )
+    eval_parser.add_argument(
+        "--retrieval-only",
+        action="store_true",
+        help="Skip generated-answer scoring; no language model is called",
     )
     return parser
 

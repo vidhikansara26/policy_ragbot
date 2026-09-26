@@ -42,12 +42,14 @@ current wording and did not state the planted day count.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol
+from pathlib import Path
+from typing import Any, Protocol
 
 from rag_lab.chunking import Chunk, chunk_document
 from rag_lab.config import EVAL_K, LEGACY_PTO_DAYS
@@ -875,6 +877,79 @@ class AnswerEvalReport:
     def conflict_handling(self) -> float:
         """Fraction of rows that cite v2 and flag v1 only when that conflict is real."""
         return _fraction([row.conflict_handled for row in self.results], label="conflict handling")
+
+
+def retrieval_record(report: EvalReport) -> dict[str, Any]:
+    """Serialize extractive Recall@K and answer accuracy for a JSON record."""
+    return {
+        "k": report.k,
+        "recall_at_k": report.mean_recall_at_k,
+        "extractive_answer_accuracy": report.answer_accuracy,
+        "results": [
+            {
+                "query_id": row.query_id,
+                "question": row.question,
+                "recall_at_k": row.recall_at_k,
+                "answer_correct": row.answer_correct,
+                "retrieval_label": row.retrieval_label.value,
+                "cited": {
+                    "doc_name": row.answer.doc_name,
+                    "section": row.answer.section,
+                    "version": row.answer.version,
+                    "status": row.answer.status,
+                },
+                "note": row.note,
+            }
+            for row in report.results
+        ],
+    }
+
+
+def generated_record(report: AnswerEvalReport) -> dict[str, Any]:
+    """Serialize generated-answer scores for a JSON record."""
+    return {
+        "k": report.k,
+        "generated_key_fact": report.generated_key_fact,
+        "citation_complete": report.citation_complete,
+        "groundedness": report.groundedness,
+        "conflict_handling": report.conflict_handling,
+        "results": [
+            {
+                "query_id": row.query_id,
+                "question": row.question,
+                "key_fact_correct": row.key_fact_correct,
+                "citation_complete": row.citation_complete,
+                "grounded": row.grounded,
+                "conflict_handled": row.conflict_handled,
+                "abstained": row.abstained,
+                "prose": row.prose,
+            }
+            for row in report.results
+        ],
+    }
+
+
+def write_eval_record(
+    path: Path,
+    retrieval: EvalReport,
+    generated: AnswerEvalReport | None,
+) -> None:
+    """Write the scoreboard(s) as JSON. ``generated`` is omitted on a retrieval-only run.
+
+    Raises:
+        EvalError: If ``path`` has no parent, or the file cannot be written.
+    """
+    if path.exists() and path.is_dir():
+        raise EvalError(f"Eval record path is a directory: {path}")
+    payload: dict[str, Any] = {
+        "retrieval": retrieval_record(retrieval),
+        "generated": generated_record(generated) if generated is not None else None,
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    except OSError as exc:
+        raise EvalError(f"Failed to write eval record to {path}") from exc
 
 
 def evaluate_answers(

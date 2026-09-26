@@ -18,7 +18,7 @@ not change extractive `query` or eval scoring.
 | 5 | Eval harness: 8+ queries, Recall@K, answer accuracy | Done |
 | 6 | Data-quality diagnosis (2-Question Debugging Framework) | Done |
 | 7 | Grounded generation + source attribution (doc, section, version) | Done |
-| 8 | GitHub Actions CI | Pending |
+| 8 | GitHub Actions CI | Done |
 
 ## Setup
 
@@ -65,10 +65,11 @@ export RAG_LAB_LLM_MODEL=gpt-4o-mini
 python -m rag_lab answer "How many Privilege Leave / PTO days do I get?"
 ```
 
-The eval scoreboard prints `recall_at_k` and `extractive_answer_accuracy`, then `generated_key_fact`, `citation_complete`, `groundedness`, and `conflict_handling`. The Privilege Leave retrieval row still records Human Rights Policy v1 as the data-quality fixture. Extractive accuracy on that row means the rank-1 chunk is v1. Key-fact accuracy on the same question means the published answer used the current wording and cited v2 while flagging v1. `eval` calls the configured LLM:
+The eval scoreboard prints `recall_at_k` and `extractive_answer_accuracy`, then `generated_key_fact`, `citation_complete`, `groundedness`, and `conflict_handling`. The Privilege Leave retrieval row still records Human Rights Policy v1 as the data-quality fixture. Extractive accuracy on that row means the rank-1 chunk is v1. Key-fact accuracy on the same question means the published answer used the current wording and cited v2 while flagging v1. `eval` calls the configured LLM unless `--retrieval-only` is set. `--output` writes the same numbers as JSON for CI:
 
 ```bash
-python -m rag_lab eval
+python -m rag_lab eval --output eval/record-full.json
+python -m rag_lab eval --retrieval-only --output eval/record-retrieval.json
 ```
 
 Print dense-only and reciprocal-rank-fusion hits on the same rows. The cross-encoder is not called. `All.HR@coforge.com` is the MiniLM miss in this corpus: dense leaves Human Rights Policy v2, section 13. Grievance Redressal, outside the top 5 (dense rank 8), BM25 ranks that chunk 1, and RRF places it in the fused top 5.

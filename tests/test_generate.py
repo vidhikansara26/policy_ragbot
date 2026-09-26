@@ -308,6 +308,7 @@ def test_truncated_contract_raises_with_the_raw_snippet() -> None:
 
 
 @pytest.mark.integration
+@pytest.mark.llm
 def test_live_llm_pto_conflict_blocks_legacy_days() -> None:
     """Runs against whichever endpoint the environment configures."""
     key = os.environ.get(config.LLM_API_KEY_ENV, "").strip()

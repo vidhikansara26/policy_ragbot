@@ -9,8 +9,39 @@ CHROMA_DIR: Path = PROJECT_ROOT / "chroma"
 CORPUS_GLOB: str = "*.md"
 REQUIRED_METADATA_FIELDS: tuple[str, ...] = ("doc_name", "section", "version", "status")
 
+# Assignment brief: 3–4 primary source documents of 500–800 words.
+# Extra investor PDFs stay indexed for eval queries that are not in that
+# set (modern-slavery pass rate, Independent Director terms). Word counts
+# are whitespace tokens of Document.body (frontmatter excluded).
+PRIMARY_WORD_MIN: int = 500
+PRIMARY_WORD_MAX: int = 800
+CORPUS_ROLE_PRIMARY: str = "primary"
+CORPUS_ROLE_SUPPLEMENTAL: str = "supplemental"
+CORPUS_ROLE_FIXTURE: str = "fixture"
+ALLOWED_CORPUS_ROLES: frozenset[str] = frozenset(
+    {CORPUS_ROLE_PRIMARY, CORPUS_ROLE_SUPPLEMENTAL, CORPUS_ROLE_FIXTURE}
+)
+PRIMARY_SOURCE_FILES: frozenset[str] = frozenset(
+    {
+        "posh_policy.md",
+        "whistleblower_policy.md",
+        "ehs_policy.md",
+        "human_rights_policy_v2.md",
+    }
+)
+SUPPLEMENTAL_SOURCE_FILES: frozenset[str] = frozenset(
+    {
+        "supplier_code_of_conduct.md",
+        "nomination_remuneration_policy.md",
+        "modern_slavery_statement.md",
+        "board_diversity_policy.md",
+        "csr_esg_policy.md",
+    }
+)
+FIXTURE_SOURCE_FILE: str = "human_rights_policy_v1.md"
+
 # Static recursive hierarchical splitter. Size is a budget, not a saw.
-# Paragraph p90 in this corpus is 391 chars; 500 keeps typical clauses intact.
+# Paragraph p90 in this corpus is 411 chars; 500 keeps typical clauses intact.
 CHUNK_SIZE: int = 500
 CHUNK_OVERLAP: int = 100
 # all-MiniLM-L6-v2 is 384-d and trained for cosine similarity.

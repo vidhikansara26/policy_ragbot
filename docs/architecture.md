@@ -32,21 +32,29 @@ The block above is the production path. Later phases add incident diagnosis, gen
 
 ## 2. Corpus facts (measured, not assumed)
 
+Word counts are whitespace tokens of the markdown body (frontmatter excluded).
+Source-document compliance, preprocessing, and gold-span uniqueness live in
+[docs/corpus.md](corpus.md).
+
 | File | Chars | Words | `##` sections | Role |
 |------|------:|------:|-------------:|------|
-| `human_rights_policy_v2.md` | 6,703 | 983 | 13 | Current Human Rights (FY 2025) |
-| `posh_policy.md` | 4,288 | 657 | 9 | POSH / SHRC |
-| `nomination_remuneration_policy.md` | 3,194 | 468 | 8 | Director tenure / pay |
-| `supplier_code_of_conduct.md` | 3,168 | 411 | 5 | Supplier labour / leave |
-| `whistleblower_policy.md` | 3,022 | 414 | 5 | Vigil mechanism |
-| `csr_esg_policy.md` | 2,777 | 388 | 5 | CSR scope |
-| `ehs_policy.md` | 2,472 | 331 | 5 | Net zero 2040 |
-| `modern_slavery_statement.md` | 2,430 | 344 | 6 | UK MSA training |
-| `board_diversity_policy.md` | 2,368 | 337 | 5 | Board composition |
-| `human_rights_policy_v1.md` | 1,675 | 246 | 6 | **Stale v1 data-quality fixture** |
-| **Total** | **32,097** | | | 10 documents |
+| `whistleblower_policy.md` | 5,186 | 737 | 7 | **primary** (vigil mechanism) |
+| `human_rights_policy_v2.md` | 4,734 | 688 | 13 | **primary** (current Human Rights FY 2025) |
+| `posh_policy.md` | 4,288 | 657 | 9 | **primary** (POSH / SHRC) |
+| `ehs_policy.md` | 4,636 | 596 | 7 | **primary** (net zero 2040) |
+| `nomination_remuneration_policy.md` | 3,194 | 468 | 8 | supplemental (Director tenure / pay) |
+| `supplier_code_of_conduct.md` | 3,168 | 411 | 5 | supplemental (supplier labour / leave) |
+| `csr_esg_policy.md` | 2,777 | 388 | 5 | supplemental (CSR scope) |
+| `modern_slavery_statement.md` | 2,430 | 344 | 6 | supplemental (UK MSA training) |
+| `board_diversity_policy.md` | 2,368 | 337 | 5 | supplemental (Board composition) |
+| `human_rights_policy_v1.md` | 1,677 | 246 | 6 | **fixture** (stale v1 PTO conflict) |
+| **Total** | **34,458** | | | 10 documents |
 
-Paragraphs in the corpus: **179**. Median length **112** chars. 90th percentile **391**. Longest **1,123**.
+Primary assignment set: four current policies in **500–800 words**. Supplemental
+investor PDFs stay indexed because eval still binds gold from them. Human Rights
+v1 is not length-gated.
+
+Paragraphs in the corpus: **188**. Median length **112** chars. 90th percentile **411**. Longest **1,424**.
 
 These numbers drive chunk size. A 300-char window would cut most of the long POSH / Human Rights paragraphs in half. A 1,000-char window would bury the stale “15 days Privilege Leave” clause inside a large Human Rights v1/v2 vector.
 
@@ -89,11 +97,11 @@ DISTANCE      = cosine
 | Choice | Why |
 |--------|-----|
 | Typed hierarchy | A POSH complaint procedure stays a `section`; a leftover long clause becomes `paragraph` or `window`. Later debug can filter by `chunk_type`. |
-| 500-char budget | Just above paragraph p90 (391). Emails and day counts stay intact. ~100–125 MiniLM tokens. |
+| 500-char budget | Just above paragraph p90 (411). Emails and day counts stay intact. ~100–125 MiniLM tokens. |
 | Pack paragraphs, never headings | Dense retrieval hates 112-char fragments; citations hate merged “Purpose+Vision” blobs. |
 | 100-char overlap on windows only | Structural splits already keep sentences together; overlap is for the last-resort saw. |
-| Not semantic / LLM chunking | Non-deterministic, extra model, overkill for 32 KB of markdown. |
-| Not one-chunk-per-file | Human Rights v2 is 6.7 KB and would dilute the grievance email. |
+| Not semantic / LLM chunking | Non-deterministic, extra model, overkill for 34 KB of markdown. |
+| Not one-chunk-per-file | Human Rights v2 is 4.7 KB and would dilute the grievance email. |
 
 ### What each chunk stores
 
@@ -106,6 +114,7 @@ metadata:
   version:      1.0
   status:       legacy            # current | legacy
   source_url:   synthetic-legacy-conflict | https://investors.coforge.com/...
+  role:         primary | supplemental | fixture
   source_file:  human_rights_policy_v1.md
   chunk_type:   section | paragraph | ...
   chunk_index:  0
@@ -134,7 +143,7 @@ score(d) = Σ 1 / (RRF_K + rank_list(d))
 
 `RRF_K` is 60. Rank is 1-based. A chunk absent from a list adds nothing for that list. `status=legacy` is still not a filter.
 
-BM25 uses `k1=1.5` and `b=0.75`. Tokens are lowercase alphanumeric runs, with no stopword list, so `15`, `days`, and `not` stay available. The postings live in memory and are rebuilt from the persisted Chroma rows: the corpus is about 32 KB, and a second on-disk index would only drift from the vectors.
+BM25 uses `k1=1.5` and `b=0.75`. Tokens are lowercase alphanumeric runs, with no stopword list, so `15`, `days`, and `not` stay available. The postings live in memory and are rebuilt from the persisted Chroma rows: the corpus is about 34 KB, and a second on-disk index would only drift from the vectors.
 
 ### Why RRF instead of adding raw scores
 
@@ -241,6 +250,9 @@ Two-question debug (later):
 ## 7. Modules
 
 ```
+docs/
+  architecture.md  locked ingest/chunk/index design
+  corpus.md        source PDFs, roles, 500–800 word band
 src/rag_lab/
   corpus.py        # exists
   chunking.py      # static recursive hierarchical types (done)
@@ -253,6 +265,7 @@ src/rag_lab/
   cli.py           # `python -m rag_lab query|eval` (inspection entrypoint)
   config.py        # CHUNK_SIZE, RRF_K, RERANK_CANDIDATE_K, EVAL_K
 tests/
+  test_corpus.py         # 500–800 primary band, roles, v1 fixture
   test_chunking.py
   test_minimal_loop.py   # retrieve-loop gate
   test_hybrid.py         # dense + BM25 + RRF

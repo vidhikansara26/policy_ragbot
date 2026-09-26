@@ -47,6 +47,7 @@ The first run loads the embedding and rerank models and writes `chroma/`. Offlin
 
 ```
 docs/architecture.md   locked ingest/chunk/index design
+docs/corpus.md         source PDFs, roles, 500–800 word band
 src/rag_lab/           platform package (one module per capability)
 tests/                 pytest; test_minimal_loop.py gates hybrid search
 data/raw/              Coforge policies (includes stale Human Rights v1)
@@ -54,3 +55,4 @@ chroma/                vector store (gitignored, rebuildable)
 ```
 
 Design reference: [docs/architecture.md](docs/architecture.md).
+Corpus inventory: [docs/corpus.md](docs/corpus.md).

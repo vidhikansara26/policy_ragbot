@@ -5,7 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from rag_lab.config import CORPUS_GLOB, RAW_DATA_DIR, REQUIRED_METADATA_FIELDS
+from rag_lab.config import (
+    ALLOWED_CORPUS_ROLES,
+    CORPUS_GLOB,
+    RAW_DATA_DIR,
+    REQUIRED_METADATA_FIELDS,
+)
 from rag_lab.exceptions import DataLoadError
 
 
@@ -33,12 +38,17 @@ class Document:
     def status(self) -> str:
         return self.metadata["status"]
 
+    @property
+    def role(self) -> str:
+        return self.metadata["role"]
+
 
 def _parse_frontmatter(raw: str, *, path: Path) -> tuple[dict[str, str], str]:
     """Split YAML-like ``key: value`` frontmatter from the markdown body.
 
     Raises:
-        DataLoadError: If the file is missing frontmatter, required fields, or a body.
+        DataLoadError: If the file is missing frontmatter, required fields, a
+            valid ``role``, or a body.
     """
     if not raw.startswith("---"):
         raise DataLoadError(f"{path} is missing YAML frontmatter")
@@ -70,7 +80,17 @@ def _parse_frontmatter(raw: str, *, path: Path) -> tuple[dict[str, str], str]:
     missing = [field for field in REQUIRED_METADATA_FIELDS if field not in metadata]
     if missing:
         raise DataLoadError(f"{path} is missing required metadata: {missing}")
+    role = metadata.get("role", "")
+    if role not in ALLOWED_CORPUS_ROLES:
+        raise DataLoadError(
+            f"{path} has invalid role={role!r}; expected one of {sorted(ALLOWED_CORPUS_ROLES)}"
+        )
     return metadata, body
+
+
+def body_word_count(text: str) -> int:
+    """Return the whitespace-separated token count of a document body."""
+    return len(text.split())
 
 
 def load_corpus(directory: Path | None = None) -> list[Document]:

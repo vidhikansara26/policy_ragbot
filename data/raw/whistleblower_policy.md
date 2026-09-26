@@ -3,6 +3,7 @@ doc_name: "Whistleblower Policy"
 section: "Reporting a Concern"
 version: "1.5"
 status: "current"
+role: "primary"
 company: "Coforge Limited"
 source_url: "https://investors.coforge.com/hubfs/Whistleblower-Policy-1.pdf"
 effective_date: "2026-06-16"
@@ -42,3 +43,17 @@ The concern should preferably be reported in writing via e-mail in English, or b
 ## 9.0 Compliance Committee
 
 The CEO constitutes a Compliance Committee of at least three members. At least one of the Compliance Officer or CFO must be present. The first meeting shall be held within **7 working days** of the concern being reported. Complaints involving the CEO, CFO, or a Compliance Committee member bypass the committee and go directly to the Chairman of the Audit Committee.
+
+## 10.0 Investigation Process
+
+The decision to conduct an investigation is not an accusation. It is a neutral fact-finding process, with reasonable efforts to keep the matter confidential. The identity of the Whistleblower is kept in confidence to the extent possible given the legitimate requirements of law and fairness in investigation.
+
+On receipt of a complaint, the CEO convenes the Compliance Committee. At the first meeting the Committee makes a preliminary assessment, decides what enquiries are required to validate the allegation, names the person responsible for those enquiries and the applicable time frame, and forwards the complaint and its recommendations to the Chairman of the Audit Committee.
+
+No investigation arrives at an adverse finding against any person without giving them a full and fair opportunity to be heard and to present evidence in their defense. All Staff Members, Directors, and officers have a duty to cooperate. Evidence is not withheld, destroyed, or tampered with, and witnesses are not influenced, coached, or intimidated. The Company may refer a concern to an external regulatory or statutory authority where the law requires it.
+
+Each investigation is ordinarily completed within 45 days of receipt of a Protected Disclosure. Where that is not possible, the Compliance Committee documents the reasons and informs the Chairman of the Audit Committee. Upon conclusion, the Compliance Officer informs the Whistleblower (where identified) of the outcome, subject to confidentiality requirements. A Whistleblower who is aggrieved by the final decision may access the Chairman of the Audit Committee.
+
+## 12.0 Confidentiality and Protection
+
+Issues raised by Whistleblowers are kept confidential by the Compliance Committee and the enquiry team. The Compliance Officer maintains the records. The identity of the Whistleblower is not disclosed unless disclosure is necessary for a proper investigation. The Company prohibits retaliation against a Whistleblower with the intent or effect of adversely affecting the terms or conditions of employment. Any person who assists in the investigation is protected to the same extent.

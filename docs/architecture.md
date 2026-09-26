@@ -72,7 +72,7 @@ document
   └─ section          ## heading   (siblings never merged)
        └─ subsection  ### heading  (siblings never merged)
             └─ paragraph          (greedy pack until 500)
-                 └─ list          markdown `-` / `*` items (greedy pack)
+                 └─ list          markdown `-` / `*` items (pack only below 200 chars)
                       └─ sentence
                            └─ window   500 / 100 overlap, last resort
 ```
@@ -83,13 +83,15 @@ Rules:
 2. Split on `## ` first. Each H2 is its own unit. **Do not pack two sections together** — citations need a real section name.
 3. If a section is still too large, drop to `### `, then blank-line paragraphs, then sentence boundaries.
 4. Adjacent paragraphs/sentences **do** pack greedily until they would exceed 500 characters (avoids a pile of 112-char embedding orphans; corpus paragraph median is 112).
-5. Character windows with 100-char overlap run only when no structural separator remains.
-6. Child chunks inherit a heading breadcrumb (`## Fair Wages and Remuneration` prefixed) so MiniLM still sees the section title.
-7. Copy parent YAML metadata onto every chunk. Override `section` with the innermost heading when present.
+5. A list item of **≥ 200 characters** is emitted alone. Parallel bullets share a template (`Net zero by 2040`, `Water positive by 2040`, `Zero waste to landfill by 2040`), so packing two of them buries the term that separates them. Shorter bullets still pack.
+6. Character windows with 100-char overlap run only when no structural separator remains.
+7. Child chunks inherit a heading breadcrumb (`## Fair Wages and Remuneration` prefixed) so MiniLM still sees the section title.
+8. Copy parent YAML metadata onto every chunk. Override `section` with the innermost heading when present.
 
 ```
-CHUNK_SIZE    = 500   # budget, not a saw
-CHUNK_OVERLAP = 100   # windows only
+CHUNK_SIZE             = 500   # budget, not a saw
+CHUNK_OVERLAP          = 100   # windows only
+LIST_ATOMIC_MIN_CHARS  = 200   # a bullet this long is indexed alone
 EMBED_MODEL   = sentence-transformers/all-MiniLM-L6-v2
 COLLECTION    = coforge_policies
 DISTANCE      = cosine
@@ -103,6 +105,7 @@ DISTANCE      = cosine
 | 500-char budget | Just above paragraph p90 (411). Emails and day counts stay intact. ~100–125 MiniLM tokens. |
 | Pack paragraphs, never headings | Dense retrieval hates 112-char fragments; citations hate merged “Purpose+Vision” blobs. |
 | 100-char overlap on windows only | Structural splits already keep sentences together; overlap is for the last-resort saw. |
+| Atomic bullets at 200 chars | Corpus bullets run 72–284 chars (median 123, p75 180). Above 200 a bullet is a whole clause and packing it with a template sibling makes two near-duplicate chunks; below 200 it is a fragment that needs its neighbours. |
 | Not semantic / LLM chunking | Non-deterministic, extra model, overkill for 34 KB of markdown. |
 | Not one-chunk-per-file | Human Rights v2 is 4.7 KB and would dilute the grievance email. |
 
@@ -175,7 +178,7 @@ Worked example with `RRF_K=60`. Document A is dense rank 1 (similarity 0.95, so 
 
 Twenty fused hits go into the cross-encoder. Five come out.
 
-The 20 are the fusion pool. Each retriever already returned a list of depth 20, and RRF kept the best 20 of that union. The cross-encoder's job is to reorder that pool using the query and the chunk text together. A chunk at fused rank 6 can be the passage that contains the answer; rescoring the pool lets it move into the five that callers see. Rescoring only those five would shuffle a list fusion had already truncated. Rescoring all ~105 chunks would run the transformer over passages both MiniLM and BM25 already ranked below the fusion cutoff. Twenty pairs fit in one CPU batch.
+The 20 are the fusion pool. Each retriever already returned a list of depth 20, and RRF kept the best 20 of that union. The cross-encoder's job is to reorder that pool using the query and the chunk text together. A chunk at fused rank 6 can be the passage that contains the answer; rescoring the pool lets it move into the five that callers see. Rescoring only those five would shuffle a list fusion had already truncated. Rescoring all ~116 chunks would run the transformer over passages both MiniLM and BM25 already ranked below the fusion cutoff. Twenty pairs fit in one CPU batch.
 
 The returned window stays 5 so the eval harness measures Recall@K at the same K the caller receives. The other 15 scores exist only to order that window. A caller who passes a larger `k` rescores `max(k, 20)` and receives `k`.
 

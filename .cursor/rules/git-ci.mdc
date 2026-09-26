@@ -11,5 +11,8 @@ alwaysApply: false
 - One feature branch per capability (`feat/chunking`, `feat/hybrid-search`), merged to `main`
   once tests pass. No force-push to `main`.
 - Never commit `.venv/`, `.env`, `chroma/` persistence dirs, or model caches.
-- CI: Python 3.11+, cache pip, `ruff check`, `mypy src`, `pytest -m "not integration"`.
+- CI: Python 3.11+, cache pip, `ruff check`, `mypy src`,
+  `pytest -m "not integration and not llm"` on every push. The `models` job
+  runs real MiniLM and cross-encoder tests plus
+  `python -m rag_lab eval --retrieval-only --output eval/record-retrieval.json`.
   Fail the build on any error.

@@ -25,6 +25,8 @@ htmlcov/
 chroma/
 data/processed/
 .cache/
+eval/*.json
+!eval/record.json
 
 # OS / IDE
 .DS_Store

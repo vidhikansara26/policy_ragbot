@@ -136,6 +136,16 @@ LEGACY_HR_COMPLAINTS_EMAIL: str = "hr.helpdesk@niit-tech.com"
 # tag are never hard-coded; generator_from_env() reads them from the environment.
 LLM_API_KEY_ENV: str = "OPENAI_API_KEY"
 LLM_MODEL_ENV: str = "RAG_LAB_LLM_MODEL"
+# Any server that speaks the OpenAI chat-completions API can answer: hosted
+# OpenAI when this is unset, or a local runtime such as Ollama
+# (http://localhost:11434/v1), llama.cpp, or vLLM when it is set. Keeping the
+# endpoint in the environment means the corpus, retrieval, and eval gold stay
+# provider-independent.
+LLM_BASE_URL_ENV: str = "RAG_LAB_LLM_BASE_URL"
+# Local runtimes do not authenticate, but the SDK refuses to construct a client
+# without a key. A base URL therefore stands in for the key. A hosted endpoint
+# with no base URL still requires a real key, so this is not a way to skip auth.
+LLM_LOCAL_API_KEY: str = "local"
 # Temperature 0 keeps the grounded JSON contract stable.
 LLM_TEMPERATURE: float = 0.0
 LLM_TIMEOUT_SECONDS: float = 120.0

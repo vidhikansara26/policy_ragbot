@@ -1,0 +1,122 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "Which extra suite to run"
+        type: choice
+        default: none
+        options:
+          - none
+          - models
+          - harness
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  HF_HUB_DISABLE_PROGRESS_BARS: "1"
+  TRANSFORMERS_VERBOSITY: error
+  TOKENIZERS_PARALLELISM: "false"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: mypy src
+      - run: pytest -m "not integration and not llm"
+      - name: Confirm the committed eval snapshot
+        run: python -m json.tool eval/record.json > /dev/null
+
+  models:
+    if: github.event_name == 'workflow_dispatch' && inputs.suite == 'models'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Restore the embedding and reranking models
+        id: hf-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-all-MiniLM-L6-v2-ms-marco-MiniLM-L-6-v2
+      - run: pip install -e ".[dev]"
+      - name: Download models when the cache missed
+        if: steps.hf-cache.outputs.cache-hit != 'true'
+        run: |
+          python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2'); CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')"
+      - name: Save the embedding and reranking models
+        if: steps.hf-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/huggingface
+          key: ${{ steps.hf-cache.outputs.cache-primary-key }}
+      - name: Real retrieval, fusion, reranking, and Recall@K
+        run: pytest -m "integration and not llm"
+      - name: Retrieval-only harness record
+        run: python -m rag_lab eval --retrieval-only --output eval/record-retrieval.json
+      - name: Upload the retrieval record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: record-retrieval
+          path: eval/record-retrieval.json
+          if-no-files-found: error
+
+  harness:
+    if: github.event_name == 'workflow_dispatch' && inputs.suite == 'harness'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      RAG_LAB_LLM_BASE_URL: http://127.0.0.1:11434/v1
+      RAG_LAB_LLM_MODEL: qwen2.5:1.5b
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-all-MiniLM-L6-v2-ms-marco-MiniLM-L-6-v2
+      - run: pip install -e ".[dev,llm]"
+      - name: Install the generator host and pull the model
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          nohup ollama serve > /tmp/ollama.log 2>&1 &
+          for _ in $(seq 1 30); do
+            curl -sf http://127.0.0.1:11434/api/tags && break
+            sleep 2
+          done
+          ollama pull "$RAG_LAB_LLM_MODEL"
+      - name: Real harness through the real generator
+        run: python -m rag_lab eval --output eval/record-full.json
+      - run: pytest -m llm
+      - name: Upload the full harness record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: record-full
+          path: eval/record-full.json
+          if-no-files-found: error

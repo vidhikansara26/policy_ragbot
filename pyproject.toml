@@ -29,7 +29,10 @@ rag_lab = ["py.typed"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-markers = ["integration: tests that download models or call a live LLM"]
+markers = [
+    "integration: tests that download embedding or rerank models, or call a live LLM",
+    "llm: tests that call a live language model",
+]
 
 [tool.ruff]
 line-length = 100

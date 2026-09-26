@@ -11,5 +11,8 @@ alwaysApply: false
 - One feature branch per capability (`feat/chunking`, `feat/hybrid-search`), merged to `main`
   once tests pass. No force-push to `main`.
 - Never commit `.venv/`, `.env`, `chroma/` persistence dirs, or model caches.
-- CI: Python 3.11+, cache pip, `ruff check`, `mypy src`, `pytest -m "not integration"`.
-  Fail the build on any error.
+- CI: Python 3.11+, cache pip, `ruff check`, `mypy src`,
+  `pytest -m "not integration and not llm"` on every push. That job already
+  runs the eval harness tests. MiniLM, the cross-encoder, and a live LLM
+  stay behind `workflow_dispatch` so a pull request finishes in about a
+  minute. Fail the build on any error.

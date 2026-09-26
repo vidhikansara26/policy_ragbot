@@ -19,6 +19,7 @@ from rag_lab import config
 from rag_lab.chunking import chunk_corpus
 from rag_lab.corpus import load_corpus
 from rag_lab.eval import (
+    AnswerCase,
     AnswerGold,
     EvalCase,
     EvalReport,
@@ -596,6 +597,148 @@ def test_generated_scores_are_separate_and_perfect_with_a_scripted_generator(
     assert refused.prose == "I cannot answer from the retrieved policies."
 
 
+def test_key_facts_are_bound_and_verified_against_the_corpus() -> None:
+    """Every expected phrase must exist in the sources, so gold cannot drift."""
+    gold = bind_answer_gold(answer_cases(), load_corpus())
+    net_zero = next(row for row in gold if row.query_id == "ehs_net_zero")
+    assert net_zero.key_facts == ("net zero", "2040")
+
+    wifi = next(row for row in gold if row.query_id == "out_of_domain_wifi")
+    assert wifi.key_facts == ()
+    assert wifi.must_abstain is True
+
+    invented = AnswerCase(
+        query_id="invented",
+        question="Does the corpus mention a signing bonus?",
+        span="Net zero by 2040",
+        key_facts=("a signing bonus of 4 lakh",),
+    )
+    with pytest.raises(EvalError, match="not in any source file"):
+        bind_answer_gold([invented], load_corpus())
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "The policy targets net zero by 2040.",
+        "The EHS policy targets **Net Zero** by 2040 across all sites.",
+        "Coforge targets\nnet zero\nby 2040.",
+    ],
+)
+def test_correct_paraphrase_scores_as_a_key_fact(tmp_path: Path, answer: str) -> None:
+    """Case, markdown emphasis, and line wrapping must not decide the score."""
+    documents = load_corpus()
+    retrieval_gold = bind_gold(evaluation_cases(), documents)
+    answer_gold = bind_answer_gold(answer_cases(), documents)
+    generator = _ScriptedGenerator({"net zero": _json_answer(grounded=True, answer=answer)})
+    index = PolicyIndex(tmp_path / "chroma", embedder=_LengthEmbedder())
+    try:
+        retriever = RerankingRetriever(
+            HybridRetriever(index),
+            scorer=_RecordingScorer(_boost_span_and_fact(retrieval_gold, answer_gold)),
+        )
+        retriever.upsert(chunk_corpus(documents))
+        report = evaluate_answers(retriever, answer_gold, generator)
+    finally:
+        index.close()
+
+    row = report.by_id("ehs_net_zero")
+    assert row.key_fact_correct is True
+    assert row.grounded is True
+
+
+def test_screened_out_legacy_sibling_is_not_required_to_be_marked() -> None:
+    """A passage below the relevance floor never reaches the prompt or the citations."""
+    documents = load_corpus()
+    gold = bind_answer_gold(
+        [
+            case
+            for case in answer_cases()
+            if case.query_id == "pto_current_no_numeric_entitlement"
+        ],
+        documents,
+    )
+    current = _hit(
+        "hr-v2",
+        "This current policy does not set a numeric Privilege Leave (PTO) entitlement.",
+        _meta(config.PLANTED_DOC_NAME, "5. Fair Wages and Remuneration", "2.0", "current"),
+        7.144,
+    )
+    screened_out = _hit(
+        "hr-v1",
+        f"Employees are entitled to {config.LEGACY_PTO_DAYS} days of Privilege Leave (PTO).",
+        _meta(config.PLANTED_DOC_NAME, "3. Fair Wages and Remuneration", "1.0", "legacy"),
+        -1.153,
+    )
+    assert screened_out.score < config.MIN_RERANK_SCORE
+
+    published = "The current policy does not set a numeric PTO entitlement."
+    generator = _ScriptedGenerator({"numeric": _json_answer(grounded=True, answer=published)})
+    report = evaluate_answers(_StaticSearcher([current, screened_out]), gold, generator)
+
+    row = report.by_id("pto_current_no_numeric_entitlement")
+    assert "(legacy conflict)" not in row.published
+    assert row.conflict_handled is True
+    assert row.key_fact_correct is True
+
+
+def test_quoting_its_own_citation_version_stays_grounded(tmp_path: Path) -> None:
+    """Version and section live in metadata, not in the passage body."""
+    documents = load_corpus()
+    retrieval_gold = bind_gold(evaluation_cases(), documents)
+    answer_gold = bind_answer_gold(answer_cases(), documents)
+    generator = _ScriptedGenerator(
+        {
+            "net zero": _json_answer(
+                grounded=True,
+                answer=(
+                    "The policy targets net zero by 2040, as stated in version 5.0 "
+                    "of the Global Environment Health and Safety Policy."
+                ),
+            )
+        }
+    )
+    index = PolicyIndex(tmp_path / "chroma", embedder=_LengthEmbedder())
+    try:
+        retriever = RerankingRetriever(
+            HybridRetriever(index),
+            scorer=_RecordingScorer(_boost_span_and_fact(retrieval_gold, answer_gold)),
+        )
+        retriever.upsert(chunk_corpus(documents))
+        report = evaluate_answers(retriever, answer_gold, generator)
+    finally:
+        index.close()
+
+    row = report.by_id("ehs_net_zero")
+    assert "5.0" in row.prose
+    assert row.key_fact_correct is True
+    assert row.grounded is True
+
+
+def test_wrong_year_still_fails_both_checks(tmp_path: Path) -> None:
+    """Normalized matching must not make a different figure acceptable."""
+    documents = load_corpus()
+    retrieval_gold = bind_gold(evaluation_cases(), documents)
+    answer_gold = bind_answer_gold(answer_cases(), documents)
+    generator = _ScriptedGenerator(
+        {"net zero": _json_answer(grounded=True, answer="The policy targets net zero by 2050.")}
+    )
+    index = PolicyIndex(tmp_path / "chroma", embedder=_LengthEmbedder())
+    try:
+        retriever = RerankingRetriever(
+            HybridRetriever(index),
+            scorer=_RecordingScorer(_boost_span_and_fact(retrieval_gold, answer_gold)),
+        )
+        retriever.upsert(chunk_corpus(documents))
+        report = evaluate_answers(retriever, answer_gold, generator)
+    finally:
+        index.close()
+
+    row = report.by_id("ehs_net_zero")
+    assert row.key_fact_correct is False
+    assert report.generated_key_fact < 1.0
+
+
 def test_planted_day_count_fails_key_fact_and_conflict_handling() -> None:
     """A published 15-day claim fails generation and leaves the v1 retrieval fixture intact."""
     documents = load_corpus()
@@ -732,6 +875,7 @@ def test_invented_phone_number_is_not_published(tmp_path: Path) -> None:
 
 
 @pytest.mark.integration
+@pytest.mark.llm
 def test_live_generator_pto_conflict_row() -> None:
     """One live answer. Skip when OpenAI is not configured."""
     if not os.environ.get(config.LLM_API_KEY_ENV, "").strip():

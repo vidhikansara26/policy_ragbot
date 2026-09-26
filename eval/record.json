@@ -1,0 +1,161 @@
+{
+  "captured_from": "python -m rag_lab eval",
+  "llm": {
+    "base_url": "http://host.docker.internal:11434/v1",
+    "model": "qwen3:8b"
+  },
+  "retrieval": {
+    "k": 5,
+    "recall_at_k": 1.0,
+    "extractive_answer_accuracy": 1.0,
+    "results": [
+      {
+        "query_id": "pto_privilege_leave",
+        "question": "How many Privilege Leave / PTO days do I get?",
+        "recall_at_k": 1.0,
+        "answer_correct": true,
+        "retrieval_label": "data_quality_fixture",
+        "cited": {
+          "doc_name": "Human Rights Policy",
+          "section": "3. Fair Wages and Remuneration",
+          "version": "1.0",
+          "status": "legacy"
+        },
+        "note": "Retrieved Human Rights Policy version 1.0, section '3. Fair Wages and Remuneration', status=legacy. This hit is the data-quality fixture, not a failed retrieval. Answer cited Human Rights Policy version 1.0, section '3. Fair Wages and Remuneration'."
+      },
+      {
+        "query_id": "pto_current_no_numeric_entitlement",
+        "question": "Does the current Human Rights Policy set a numeric Privilege Leave (PTO) entitlement?",
+        "recall_at_k": 1.0,
+        "answer_correct": true,
+        "retrieval_label": "hit",
+        "cited": {
+          "doc_name": "Human Rights Policy",
+          "section": "5. Fair Wages and Remuneration",
+          "version": "2.0",
+          "status": "current"
+        },
+        "note": ""
+      },
+      {
+        "query_id": "posh_shrc_email",
+        "question": "What is the Sexual Harassment Redressal Committee email id?",
+        "recall_at_k": 1.0,
+        "answer_correct": true,
+        "retrieval_label": "hit",
+        "cited": {
+          "doc_name": "Policy Against Sexual Harassment at Workplace",
+          "section": "7.2 Sexual Harassment Redressal Committee (SHRC)",
+          "version": "2024",
+          "status": "current"
+        },
+        "note": ""
+      },
+      {
+        "query_id": "posh_complaint_deadline",
+        "question": "Within how many months must a sexual harassment complaint be reported to the SHRC?",
+        "recall_at_k": 1.0,
+        "answer_correct": true,
+        "retrieval_label": "hit",
+        "cited": {
+          "doc_name": "Policy Against Sexual Harassment at Workplace",
+          "section": "8.0 Procedure to Complain",
+          "version": "2024",
+          "status": "current"
+        },
+        "note": ""
+      },
+      {
+        "query_id": "whistleblower_channel",
+        "question": "What is the dedicated whistleblower email channel?",
+        "recall_at_k": 1.0,
+        "answer_correct": true,
+        "retrieval_label": "hit",
+        "cited": {
+          "doc_name": "Whistleblower Policy",
+          "section": "8.0 Reporting a Concern",
+          "version": "1.5",
+          "status": "current"
+        },
+        "note": ""
+      },
+      {
+        "query_id": "whistleblower_acknowledgement",
+        "question": "How many working days does the Compliance Officer have to acknowledge a whistleblower complaint?",
+        "recall_at_k": 1.0,
+        "answer_correct": true,
+        "retrieval_label": "hit",
+        "cited": {
+          "doc_name": "Whistleblower Policy",
+          "section": "8.0 Reporting a Concern",
+          "version": "1.5",
+          "status": "current"
+        },
+        "note": ""
+      },
+      {
+        "query_id": "ehs_net_zero",
+        "question": "By when does the Environment Health and Safety policy target net zero?",
+        "recall_at_k": 1.0,
+        "answer_correct": true,
+        "retrieval_label": "hit",
+        "cited": {
+          "doc_name": "Global Environment Health and Safety Policy",
+          "section": "Objectives",
+          "version": "5.0",
+          "status": "current"
+        },
+        "note": ""
+      },
+      {
+        "query_id": "ehs_governance_review",
+        "question": "Which committee reviews the EHS policy annually?",
+        "recall_at_k": 1.0,
+        "answer_correct": true,
+        "retrieval_label": "hit",
+        "cited": {
+          "doc_name": "Global Environment Health and Safety Policy",
+          "section": "Governance",
+          "version": "5.0",
+          "status": "current"
+        },
+        "note": ""
+      },
+      {
+        "query_id": "modern_slavery_training_pass_rate",
+        "question": "What pass rate is required to complete the modern slavery training?",
+        "recall_at_k": 1.0,
+        "answer_correct": true,
+        "retrieval_label": "hit",
+        "cited": {
+          "doc_name": "Modern Slavery Act Statement",
+          "section": "Training",
+          "version": "2024",
+          "status": "current"
+        },
+        "note": ""
+      },
+      {
+        "query_id": "nomination_independent_director_terms",
+        "question": "How many consecutive terms may an Independent Director hold office?",
+        "recall_at_k": 1.0,
+        "answer_correct": true,
+        "retrieval_label": "hit",
+        "cited": {
+          "doc_name": "Nomination and Remuneration Policy",
+          "section": "Independent Director",
+          "version": "2023-04-27",
+          "status": "current"
+        },
+        "note": ""
+      }
+    ]
+  },
+  "generated": {
+    "k": 5,
+    "generated_key_fact": 1.0,
+    "citation_complete": 1.0,
+    "groundedness": 1.0,
+    "conflict_handling": 1.0
+  }
+}

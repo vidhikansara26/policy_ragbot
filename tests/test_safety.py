@@ -145,6 +145,137 @@ def test_human_rights_conflict_prefers_current_over_higher_scored_legacy() -> No
     assert fake.prompts[0].index(_CURRENT_PTO) < fake.prompts[0].index(_LEGACY_PTO)
 
 
+def test_legacy_survivor_re_admits_its_current_twin_from_below_the_floor() -> None:
+    """The cross-encoder scores the retired clause above the policy that replaced it."""
+    legacy = _hit(
+        "hr-v1",
+        _LEGACY_PTO,
+        doc_name=config.PLANTED_DOC_NAME,
+        section="3. Fair Wages and Remuneration",
+        version=config.LEGACY_POLICY_VERSION,
+        status="legacy",
+        score=6.406,
+    )
+    current = _hit(
+        "hr-v2",
+        _CURRENT_PTO,
+        doc_name=config.PLANTED_DOC_NAME,
+        section="5. Fair Wages and Remuneration",
+        version=config.CURRENT_POLICY_VERSION,
+        status="current",
+        score=-1.023,
+    )
+    assert current.score < config.MIN_RERANK_SCORE <= legacy.score
+
+    question = "How many Privilege Leave / PTO days do I get?"
+    screened = screen_hits(question, [legacy, current])
+    assert screened.abstain is False
+    assert screened.has_legacy_conflict is True
+    assert [hit.chunk_id for hit in screened.hits] == ["hr-v2", "hr-v1"]
+
+    published = "This current policy does not set a numeric Privilege Leave (PTO) entitlement."
+    fake = _FakeGenerator(json.dumps({"grounded": True, "answer": published}))
+    answer = generate_answer(question, [legacy, current], fake)
+
+    assert fake.calls == 1
+    assert answer.abstained is False
+    assert answer.has_legacy_conflict is True
+    assert f"{config.LEGACY_PTO_DAYS} days" not in answer.text
+    legacy_citation = next(
+        item for item in answer.citations if item.version == config.LEGACY_POLICY_VERSION
+    )
+    assert legacy_citation.legacy_conflict is True
+    assert any(
+        item.version == config.CURRENT_POLICY_VERSION and not item.legacy_conflict
+        for item in answer.citations
+    )
+
+
+def test_companion_rule_does_not_re_admit_an_unrelated_document() -> None:
+    """Only the legacy hit's own document is re-admitted from below the floor."""
+    legacy = _hit(
+        "hr-v1",
+        _LEGACY_PTO,
+        doc_name=config.PLANTED_DOC_NAME,
+        section="3. Fair Wages and Remuneration",
+        version=config.LEGACY_POLICY_VERSION,
+        status="legacy",
+        score=6.406,
+    )
+    supplier = _hit(
+        "supplier-leave",
+        _SUPPLIER_LEAVE,
+        doc_name="Supplier Code of Conduct",
+        section="Labor Management and Human Rights",
+        version="2025",
+        status="current",
+        score=-4.2,
+    )
+    screened = screen_hits("How many Privilege Leave / PTO days do I get?", [legacy, supplier])
+    assert [hit.chunk_id for hit in screened.hits] == ["hr-v1"]
+    assert screened.has_legacy_conflict is False
+
+
+def test_companion_rule_keeps_the_highest_scoring_current_twin() -> None:
+    legacy = _hit(
+        "hr-v1",
+        _LEGACY_PTO,
+        doc_name=config.PLANTED_DOC_NAME,
+        section="3. Fair Wages and Remuneration",
+        version=config.LEGACY_POLICY_VERSION,
+        status="legacy",
+        score=6.406,
+    )
+    weak = _hit(
+        "hr-v2-preamble",
+        "The Company respects internationally recognised human rights.",
+        doc_name=config.PLANTED_DOC_NAME,
+        section="1. Introduction",
+        version=config.CURRENT_POLICY_VERSION,
+        status="current",
+        score=-6.5,
+    )
+    best = _hit(
+        "hr-v2",
+        _CURRENT_PTO,
+        doc_name=config.PLANTED_DOC_NAME,
+        section="5. Fair Wages and Remuneration",
+        version=config.CURRENT_POLICY_VERSION,
+        status="current",
+        score=-1.023,
+    )
+    screened = screen_hits(
+        "How many Privilege Leave / PTO days do I get?",
+        [legacy, weak, best],
+    )
+    assert [hit.chunk_id for hit in screened.hits] == ["hr-v2", "hr-v1"]
+
+
+def test_abstention_still_wins_when_nothing_clears_the_floor() -> None:
+    """The companion rule cannot resurrect a window the floor rejected outright."""
+    legacy = _hit(
+        "hr-v1",
+        _LEGACY_PTO,
+        doc_name=config.PLANTED_DOC_NAME,
+        section="3. Fair Wages and Remuneration",
+        version=config.LEGACY_POLICY_VERSION,
+        status="legacy",
+        score=-0.5,
+    )
+    current = _hit(
+        "hr-v2",
+        _CURRENT_PTO,
+        doc_name=config.PLANTED_DOC_NAME,
+        section="5. Fair Wages and Remuneration",
+        version=config.CURRENT_POLICY_VERSION,
+        status="current",
+        score=-1.023,
+    )
+    screened = screen_hits("How many Privilege Leave / PTO days do I get?", [legacy, current])
+    assert screened.abstain is True
+    assert screened.hits == ()
+
+
 def test_short_pto_query_drops_supplier_leave_and_prefers_current() -> None:
     supplier = _hit(
         "supplier-leave",

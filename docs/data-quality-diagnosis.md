@@ -1,7 +1,7 @@
 # Incident: stale Privilege Leave (PTO) entitlement
 
 Two-Question Debugging Framework applied to the planted data-quality fixture.
-Evidence below was captured on commit `9c6d8b7` with `python -m rag_lab query`.
+Evidence below was captured with `python -m rag_lab query` and `answer`.
 `tests/test_data_quality_diagnosis.py` pins every claim on this page.
 
 ## Symptom
@@ -94,9 +94,10 @@ the resolution is visible and citable.
    `corpus.load_corpus` or `index.PolicyIndex.upsert`. Version and status are
    required chunk metadata (`config.REQUIRED_METADATA_FIELDS`).
 2. **Prefer current sources at generation.** `safety.screen_hits` orders
-   `status=current` ahead of `status=legacy` before the prompt is built, and
-   `generate.generate_answer` abstains outright on a legacy-only window rather
-   than publishing a retired clause.
+   `status=current` ahead of `status=legacy` before the prompt is built, keeps
+   the current counterpart of a surviving legacy hit even below the relevance
+   floor, and `generate.generate_answer` abstains outright on a legacy-only
+   window rather than publishing a retired clause.
 3. **Block the retired fact from prose.** The leak guard in
    `generate._publishable_prose` drops a sentence that is supported only by a
    legacy passage, so `15 days` cannot reach a published answer.
@@ -107,11 +108,13 @@ the resolution is visible and citable.
    `data_quality_fixture`, and `conflict_handling` in `evaluate_answers` fails
    if a generated answer publishes the legacy day count.
 
-## Known gap (open)
+## The score floor, and why it needed an exception
 
-Remediation steps 2 and 4 do not currently reach the default CLI path for this
-question. `config.MIN_RERANK_SCORE` is `0.0`, and the current v2 counterpart
-scores `-1.023`, so `screen_hits` removes it before the prompt is built:
+Remediation steps 2 and 4 did not originally reach the CLI path for this
+question. `config.MIN_RERANK_SCORE` is `0.0` and the current v2 counterpart
+scores `-1.023`, so `screen_hits` removed the current policy before the prompt
+was built and left a window of the retired clause plus an unrelated supplier
+passage:
 
 ```
 screened abstain: False | legacy_conflict: False
@@ -119,13 +122,58 @@ screened abstain: False | legacy_conflict: False
   kept +6.406  Human Rights Policy       v1.0   legacy
 ```
 
-The leak guard still blocks `15 days`, so the retired number is never
-published. But because v2 is screened out, the window no longer holds both
-statuses of one document, so `has_legacy_conflict` is `False` and the Sources
-block cites v1 without the `(legacy conflict)` mark and without v2 beside it.
+The leak guard still blocked `15 days`, so the retired number was never
+published. But with v2 screened out the window no longer held both statuses of
+one document, `has_legacy_conflict` was `False`, and the answer could only
+abstain while citing v1 without the `(legacy conflict)` mark.
 
-The fix is a conflict-companion rule in `safety.screen_hits`: when a legacy
-hit survives the score floor, retain the highest-scoring `status=current` hit
-that shares its `doc_name`, even below the floor. That keeps the floor's
-purpose — dropping irrelevant passages — while guaranteeing the current
-version is present whenever its retired twin is.
+This is the same root cause seen from the other end. The floor assumes score
+tracks usefulness, and on a version conflict it does not: the retired clause
+scores high *because* it answers the question literally, and the current clause
+scores low *because* it says the figure no longer exists.
+
+`safety.screen_hits` now applies a conflict-companion rule. When a legacy hit
+survives the floor, the highest-scoring `status=current` hit sharing its
+`doc_name` is re-admitted even from below the floor. The companion still has to
+pass the lexical gate, so the window widens by version lineage only, never by
+relevance, and a window where nothing clears the floor still abstains outright.
+`tests/test_safety.py` pins all four behaviours.
+
+The CLI now answers from the current policy and marks the conflict:
+
+```
+$ python -m rag_lab answer "How many Privilege Leave / PTO days do I get?"
+The current policy does not set a numeric Privilege Leave (PTO) entitlement.
+Leave entitlements for Coforge employees follow local law and service
+conditions, as stated in the current Human Rights Policy and Supplier Code of
+Conduct.
+Sources:
+- Supplier Code of Conduct, Labor Management and Human Rights, v2025
+- Human Rights Policy, 5. Fair Wages and Remuneration, v2.0
+- Human Rights Policy, 3. Fair Wages and Remuneration, v1.0 (legacy conflict)
+```
+
+`15 days` is still absent, v1 is still indexed, and the retired version is now
+visible beside the policy that replaced it rather than silently dropped.
+
+## A second prompt-level finding
+
+Closing the floor gap exposed one more defect, in the prompt rather than the
+corpus. The instruction read "Set grounded to false when no current passage
+supports the question." Asked how many PTO days the policy grants, the model
+correctly observed that no current passage states a day count and therefore set
+`grounded: false`, discarding its own accurate answer:
+
+```
+{"grounded": false, "answer": "The current policy does not specify a numeric
+Privilege Leave (PTO) entitlement. Your entitlement follows local employment
+laws and service conditions."}
+```
+
+The instruction made "current policy sets no such figure" unanswerable by
+construction: the model had to report an absence while being told an absence
+means ungrounded. `grounded` now describes the answer rather than the question,
+and reporting that current policy sets no figure counts as grounded when a
+current passage says so. This is worth recording next to the data-quality
+incident because it is the mirror image of it — here the retrieval and the
+corpus were both right, and the instructions were wrong.

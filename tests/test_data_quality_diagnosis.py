@@ -170,19 +170,47 @@ def test_remediation_leak_guard_never_publishes_the_legacy_day_count(
     assert config.PLANTED_DOC_NAME in published
 
 
-def test_known_gap_score_floor_screens_the_current_twin(window: list[RerankedHit]) -> None:
-    """The open gap recorded in the diagnosis: v2 is below MIN_RERANK_SCORE.
+def test_companion_rule_keeps_the_current_twin_below_the_score_floor(
+    window: list[RerankedHit],
+) -> None:
+    """Remediation step 2: the floor no longer hides the policy that replaced v1.
 
-    When this starts failing, the conflict-companion rule has landed and the
-    Known gap section of the diagnosis must be closed out.
+    The cross-encoder scores the retired clause above its current counterpart,
+    because only the retired text states a day count. Dropping the current twin
+    on score alone would leave a window that cannot state current policy.
     """
     assert _CURRENT_SCORE < config.MIN_RERANK_SCORE <= _LEGACY_SCORE
     screened = screen_hits(_PTO_QUESTION, window)
 
     kept = [(hit.metadata["version"], hit.metadata["status"]) for hit in screened.hits]
-    assert (config.CURRENT_POLICY_VERSION, "current") not in kept
+    assert (config.CURRENT_POLICY_VERSION, "current") in kept
     assert (config.LEGACY_POLICY_VERSION, "legacy") in kept
-    assert screened.has_legacy_conflict is False
+    assert screened.has_legacy_conflict is True
+    statuses = [hit.metadata["status"] for hit in screened.hits]
+    assert statuses.index("current") < statuses.index("legacy")
+
+
+def test_remediation_marks_the_legacy_citation_as_a_conflict(
+    window: list[RerankedHit],
+) -> None:
+    """Remediation step 4: v1 is cited beside v2 and labelled, not hidden."""
+    published = "The current Human Rights Policy does not set a numeric PTO entitlement."
+    generator = _FakeGenerator(json.dumps({"grounded": True, "answer": published}))
+    answer = generate_answer(_PTO_QUESTION, window, generator)
+    rendered = render_answer(answer)
+
+    assert answer.abstained is False
+    assert answer.has_legacy_conflict is True
+    assert f"{config.LEGACY_PTO_DAYS} days" not in rendered
+    assert "(legacy conflict)" in rendered
+    legacy = next(
+        item for item in answer.citations if item.version == config.LEGACY_POLICY_VERSION
+    )
+    assert legacy.legacy_conflict is True
+    assert any(
+        item.version == config.CURRENT_POLICY_VERSION and not item.legacy_conflict
+        for item in answer.citations
+    )
 
 
 def test_diagnosis_document_answers_both_questions() -> None:

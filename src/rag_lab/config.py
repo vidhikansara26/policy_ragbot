@@ -44,6 +44,15 @@ FIXTURE_SOURCE_FILE: str = "human_rights_policy_v1.md"
 # Paragraph p90 in this corpus is 411 chars; 500 keeps typical clauses intact.
 CHUNK_SIZE: int = 500
 CHUNK_OVERLAP: int = 100
+# Parallel list items are near-duplicates of each other: "Net zero by 2040",
+# "Water positive by 2040", and "Zero waste to landfill by 2040" share a
+# template, so packing two of them into one window buries the term that tells
+# them apart and neither BM25 nor the cross-encoder can pick a winner. A bullet
+# at or above this length is already a self-contained clause and is indexed
+# alone. Shorter bullets still pack: corpus bullets run 72-284 chars with a
+# median of 123 and p75 of 180, and a 90-char fragment is too little context to
+# answer from on its own.
+LIST_ATOMIC_MIN_CHARS: int = 200
 # all-MiniLM-L6-v2 is 384-d and trained for cosine similarity.
 # L2-normalized vectors make cosine identical to the inner product.
 EMBED_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"

@@ -3,8 +3,9 @@
 Splitters are a fixed coarse-to-fine ladder (not an LLM). A unit that still
 exceeds ``CHUNK_SIZE`` is recursed into the next finer type. Sibling
 headings are never merged, so generated answers can cite a real section name. Adjacent
-paragraphs and sentences are packed greedily up to the size budget. Character
-windows with overlap are the last resort.
+paragraphs and sentences are packed greedily up to the size budget. A list item
+of at least ``LIST_ATOMIC_MIN_CHARS`` is indexed alone so parallel bullets do not
+become near-duplicate chunks. Character windows with overlap are the last resort.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from rag_lab.config import CHUNK_OVERLAP, CHUNK_SIZE
+from rag_lab.config import CHUNK_OVERLAP, CHUNK_SIZE, LIST_ATOMIC_MIN_CHARS
 from rag_lab.corpus import Document
 from rag_lab.exceptions import ChunkingError
 
@@ -121,6 +122,11 @@ _HEADING_TYPES = frozenset({ChunkType.SECTION, ChunkType.SUBSECTION})
 _PACK_TYPES = frozenset({ChunkType.PARAGRAPH, ChunkType.LIST, ChunkType.SENTENCE})
 
 
+def _is_atomic_list_item(chunk_type: ChunkType, part: str) -> bool:
+    """Report whether ``part`` is a list item long enough to be indexed alone."""
+    return chunk_type is ChunkType.LIST and len(part) >= LIST_ATOMIC_MIN_CHARS
+
+
 def _with_heading(text: str, heading_stack: tuple[str, ...]) -> str:
     if not heading_stack or text.startswith("#"):
         return text
@@ -217,7 +223,7 @@ def _split_recursive(
             recurse(part, child_stack or heading_stack)
             continue
 
-        if not pack:
+        if not pack or _is_atomic_list_item(chunk_type, part):
             flush()
             emitted.extend(
                 _leaf(

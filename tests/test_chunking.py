@@ -126,6 +126,37 @@ def test_bullet_items_are_not_cut_mid_line() -> None:
         assert chunk_type in {ChunkType.LIST, ChunkType.SECTION, ChunkType.PARAGRAPH}
 
 
+def test_long_list_items_are_not_packed_together() -> None:
+    """Two self-contained bullets stay in separate chunks."""
+    clause = "reduce the measured impact across every operating site and report it. " * 3
+    bullets = "\n".join(f"- **Target {name} by 2040:** {clause}" for name in "ABC")
+    body = f"## Objectives\n\n{bullets}"
+    pieces = chunk_text(body, size=500, overlap=100)
+    texts = [text for text, _, _ in pieces]
+    assert any("Target A" in text and "Target B" not in text for text in texts)
+    assert not any("Target A" in text and "Target B" in text for text in texts)
+
+
+def test_short_list_items_still_pack_for_context() -> None:
+    """A bullet below the atomic floor keeps its siblings so it is answerable."""
+    bullets = "\n".join(
+        f"- Duty {index:02d}: keep the workplace safe and report incidents." for index in range(12)
+    )
+    pieces = chunk_text(f"## Duties\n\n{bullets}", size=500, overlap=100)
+    packed = [text for text, chunk_type, _ in pieces if chunk_type is ChunkType.LIST]
+    assert packed
+    assert any(text.count("- Duty") > 1 for text in packed)
+
+
+def test_parallel_objectives_do_not_share_a_chunk() -> None:
+    """The "by 2040" objectives are near-duplicates; the gold bullet is indexed alone."""
+    gold = [chunk for chunk in chunk_corpus(load_corpus()) if "Net zero by 2040" in chunk.text]
+    assert len(gold) == 1
+    assert gold[0].chunk_type is ChunkType.LIST
+    assert "Water positive by 2040" not in gold[0].text
+    assert "Zero waste to landfill by 2040" not in gold[0].text
+
+
 def test_h3_subsections_keep_separate_identities() -> None:
     body = (
         "## Parent\n\n"

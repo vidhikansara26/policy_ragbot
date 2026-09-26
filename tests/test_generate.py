@@ -100,6 +100,19 @@ def _pto_window() -> list[RerankedHit]:
     ]
 
 
+def _posh_window() -> list[RerankedHit]:
+    return [
+        _hit(
+            "posh-1",
+            _POSH_TEXT,
+            doc_name="POSH Policy",
+            section="4. Complaint Procedure",
+            version="1.0",
+            status="current",
+        )
+    ]
+
+
 def _json_answer(*, grounded: bool, answer: str) -> str:
     return json.dumps({"grounded": grounded, "answer": answer})
 
@@ -139,17 +152,7 @@ def test_pto_conflict_answers_from_current_and_marks_legacy() -> None:
 
 def test_posh_email_is_cited() -> None:
     fake = _FakeGenerator(_json_answer(grounded=True, answer=_POSH_TEXT))
-    hits = [
-        _hit(
-            "posh-1",
-            _POSH_TEXT,
-            doc_name="POSH Policy",
-            section="4. Complaint Procedure",
-            version="1.0",
-            status="current",
-        )
-    ]
-    answer = generate_answer("Where do I send a POSH complaint?", hits, fake)
+    answer = generate_answer("Where do I send a POSH complaint?", _posh_window(), fake)
     rendered = render_answer(answer)
 
     assert answer.abstained is False
@@ -218,6 +221,7 @@ def test_empty_question_raises() -> None:
 def test_missing_env_raises_generation_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(config.LLM_API_KEY_ENV, raising=False)
     monkeypatch.delenv(config.LLM_MODEL_ENV, raising=False)
+    monkeypatch.delenv(config.LLM_BASE_URL_ENV, raising=False)
     with pytest.raises(GenerationError, match=config.LLM_API_KEY_ENV):
         generator_from_env()
 
@@ -226,16 +230,90 @@ def test_missing_env_raises_generation_error(monkeypatch: pytest.MonkeyPatch) ->
         generator_from_env()
 
 
+def test_base_url_replaces_the_key_for_a_local_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A local OpenAI-compatible server needs no key; the model is still required."""
+    pytest.importorskip("openai")
+    monkeypatch.delenv(config.LLM_API_KEY_ENV, raising=False)
+    monkeypatch.setenv(config.LLM_BASE_URL_ENV, "http://localhost:11434/v1")
+    monkeypatch.delenv(config.LLM_MODEL_ENV, raising=False)
+    with pytest.raises(GenerationError, match=config.LLM_MODEL_ENV):
+        generator_from_env()
+
+    monkeypatch.setenv(config.LLM_MODEL_ENV, "qwen3:8b")
+    generator = generator_from_env()
+    assert hasattr(generator, "complete")
+
+
 def test_bad_model_json_raises() -> None:
     fake = _FakeGenerator("not-json")
     with pytest.raises(GenerationError, match="unparseable JSON"):
         generate_answer(_PTO_QUESTION, _pto_window(), fake)
 
 
+def test_reasoning_block_is_stripped_before_the_contract_is_parsed() -> None:
+    """Qwen3-style <think> scratch work must not break or reach the answer."""
+    payload = _json_answer(grounded=True, answer=_POSH_TEXT)
+    fake = _FakeGenerator(
+        f"<think>The legacy passage says {config.LEGACY_PTO_DAYS} days, "
+        f"but it is retired.</think>\n{payload}"
+    )
+    answer = generate_answer("Where do I send a POSH complaint?", _posh_window(), fake)
+
+    assert answer.abstained is False
+    assert answer.text == _POSH_TEXT
+    assert "<think>" not in answer.text
+    assert f"{config.LEGACY_PTO_DAYS} days" not in answer.text
+
+
+def test_reasoning_block_with_no_contract_raises() -> None:
+    fake = _FakeGenerator("<think>I am still deciding.</think>")
+    with pytest.raises(GenerationError, match="empty completion"):
+        generate_answer(_PTO_QUESTION, _pto_window(), fake)
+
+
+def test_contract_wrapped_in_prose_is_parsed() -> None:
+    payload = _json_answer(grounded=True, answer=_POSH_TEXT)
+    fake = _FakeGenerator(f"Sure, here is the object you asked for:\n{payload}\nLet me know.")
+    answer = generate_answer("Where do I send a POSH complaint?", _posh_window(), fake)
+
+    assert answer.abstained is False
+    assert answer.text == _POSH_TEXT
+
+
+def test_trailing_brace_after_the_contract_is_ignored() -> None:
+    """Observed from qwen3:8b: one closing brace too many."""
+    payload = _json_answer(grounded=True, answer=_POSH_TEXT)
+    fake = _FakeGenerator(f"{payload}}}")
+    answer = generate_answer("Where do I send a POSH complaint?", _posh_window(), fake)
+
+    assert answer.abstained is False
+    assert answer.text == _POSH_TEXT
+
+
+def test_brace_inside_the_answer_string_does_not_truncate_the_contract() -> None:
+    quoted = 'Send it to the SHRC using the {shrc} alias at shrc@coforge.com.'
+    fake = _FakeGenerator(f"{_json_answer(grounded=True, answer=quoted)}\ntrailing noise")
+    answer = generate_answer("Where do I send a POSH complaint?", _posh_window(), fake)
+
+    assert answer.abstained is False
+    assert answer.text == quoted
+
+
+def test_truncated_contract_raises_with_the_raw_snippet() -> None:
+    fake = _FakeGenerator('{"grounded": true, "answer": "half a sen')
+    with pytest.raises(GenerationError, match="half a sen"):
+        generate_answer(_PTO_QUESTION, _pto_window(), fake)
+
+
 @pytest.mark.integration
-def test_live_openai_pto_conflict_blocks_legacy_days() -> None:
-    if not os.environ.get(config.LLM_API_KEY_ENV, "").strip():
-        pytest.skip("OPENAI_API_KEY is unset")
+def test_live_llm_pto_conflict_blocks_legacy_days() -> None:
+    """Runs against whichever endpoint the environment configures."""
+    key = os.environ.get(config.LLM_API_KEY_ENV, "").strip()
+    base_url = os.environ.get(config.LLM_BASE_URL_ENV, "").strip()
+    if not key and not base_url:
+        pytest.skip(f"set {config.LLM_API_KEY_ENV} or {config.LLM_BASE_URL_ENV}")
     if not os.environ.get(config.LLM_MODEL_ENV, "").strip():
         pytest.skip(f"{config.LLM_MODEL_ENV} is unset")
 

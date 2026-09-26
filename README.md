@@ -26,7 +26,7 @@ not change extractive `query` or eval scoring.
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
-cp .env.example .env   # set OPENAI_API_KEY and RAG_LAB_LLM_MODEL for the answer command
+cp .env.example .env   # set the LLM model and endpoint for the answer command
 pytest
 ```
 
@@ -38,13 +38,26 @@ One question runs the whole path (chunk, MiniLM, Chroma, BM25, reciprocal rank f
 python -m rag_lab query "How many Privilege Leave / PTO days do I get?"
 ```
 
-Generate a grounded answer (requires `OPENAI_API_KEY` and `RAG_LAB_LLM_MODEL`,
-for example `gpt-4o-mini`). Install the SDK with `pip install -e ".[dev,llm]"`.
+Generate a grounded answer. Install the SDK with `pip install -e ".[dev,llm]"`.
 The model sees only the reranked window. Citations keep the chunk section
 string. A current/legacy disagreement is answered from the current policy and
 the legacy line is marked. The planted 15-day entitlement is not published as
 current policy. `status=legacy` is still not filtered at ingest. `query` stays
-extractive:
+extractive.
+
+Any server speaking the OpenAI chat-completions API can answer. A local
+runtime needs no key, because `RAG_LAB_LLM_BASE_URL` stands in for it. Qwen3
+and other reasoning models may wrap the JSON contract in a `<think>` block;
+that block is stripped before parsing and never reaches a published answer:
+
+```bash
+export RAG_LAB_LLM_BASE_URL=http://localhost:11434/v1
+export RAG_LAB_LLM_MODEL=qwen3:8b
+python -m rag_lab answer "How many Privilege Leave / PTO days do I get?"
+```
+
+Hosted OpenAI is the default when no base URL is set, and then the key is
+required:
 
 ```bash
 export OPENAI_API_KEY=sk-...

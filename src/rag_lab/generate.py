@@ -26,6 +26,8 @@ from typing import Any, Protocol
 from rag_lab.config import (
     LEGACY_PTO_DAYS,
     LLM_API_KEY_ENV,
+    LLM_BASE_URL_ENV,
+    LLM_LOCAL_API_KEY,
     LLM_MODEL_ENV,
     LLM_TEMPERATURE,
     LLM_TIMEOUT_SECONDS,
@@ -44,6 +46,12 @@ _SECTION_NUMBER_PREFIX = re.compile(r"^\d+\.\s+")
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 _EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 _LONG_NUMBER = re.compile(r"\d{7,}")
+# Local reasoning models (Qwen3, DeepSeek-R1) narrate inside a <think> block
+# before emitting the JSON object. The block is scratch work, never grounding,
+# so it is removed before parsing and never reaches a published answer.
+_REASONING_BLOCK = re.compile(r"<(think|thinking)\b[^>]*>.*?</\1\s*>", re.DOTALL | re.IGNORECASE)
+# How much of an unparseable completion is quoted back in the error.
+_RAW_SNIPPET_CHARS = 200
 
 _STATUS_CURRENT = "current"
 _STATUS_LEGACY = "legacy"
@@ -159,20 +167,28 @@ class OpenAIChatGenerator:
 
 
 def generator_from_env() -> TextGenerator:
-    """Build an OpenAI chat generator from the environment.
+    """Build a chat generator for OpenAI or any OpenAI-compatible endpoint.
 
-    ``OPENAI_API_KEY`` and ``RAG_LAB_LLM_MODEL`` are required. The key is never
+    ``RAG_LAB_LLM_MODEL`` is always required. ``RAG_LAB_LLM_BASE_URL`` redirects
+    the SDK at a server that speaks the same chat-completions API, for example
+    Ollama at ``http://localhost:11434/v1``. Those runtimes do not authenticate,
+    so a base URL stands in for ``OPENAI_API_KEY``; with no base URL the hosted
+    OpenAI endpoint is used and the key is required. The key is never
     hard-coded and is not logged. The ``openai`` package is imported only on
     this path.
 
     Raises:
-        GenerationError: If the key or model is missing, or ``openai`` is not
-            installed. Raised before any HTTP call.
+        GenerationError: If the model is missing, neither a key nor a base URL
+            is set, or ``openai`` is not installed. Raised before any HTTP call.
     """
     api_key = os.environ.get(LLM_API_KEY_ENV, "").strip()
     model = os.environ.get(LLM_MODEL_ENV, "").strip()
-    if not api_key:
-        raise GenerationError(f"{LLM_API_KEY_ENV} is not set")
+    base_url = os.environ.get(LLM_BASE_URL_ENV, "").strip()
+    if not api_key and not base_url:
+        raise GenerationError(
+            f"{LLM_API_KEY_ENV} is not set. Set it for the hosted OpenAI endpoint, "
+            f"or set {LLM_BASE_URL_ENV} for a local OpenAI-compatible server"
+        )
     if not model:
         raise GenerationError(f"{LLM_MODEL_ENV} is not set")
 
@@ -183,8 +199,13 @@ def generator_from_env() -> TextGenerator:
             'The openai package is not installed. Install with pip install -e ".[llm]".'
         ) from exc
 
-    logger.info("LLM provider=openai model=%s", model)
-    client = OpenAI(api_key=api_key, timeout=LLM_TIMEOUT_SECONDS)
+    logger.info("LLM model=%s base_url=%s", model, base_url or "default (hosted OpenAI)")
+    key = api_key or LLM_LOCAL_API_KEY
+    client = (
+        OpenAI(api_key=key, base_url=base_url, timeout=LLM_TIMEOUT_SECONDS)
+        if base_url
+        else OpenAI(api_key=key, timeout=LLM_TIMEOUT_SECONDS)
+    )
     return OpenAIChatGenerator(client, model=model)
 
 
@@ -380,8 +401,13 @@ def _build_prompt(question: str, cited: Sequence[_CitedHit]) -> str:
         "If a current passage and a legacy passage of the same policy disagree, "
         "answer only from the current passage.",
         "Never invent day counts, emails, or clauses that are not in a status=current passage.",
+        "Answer in complete sentences and keep every condition the passage attaches "
+        "to the rule, such as deadlines, thresholds, and exceptions.",
         'Respond with a single JSON object: {"grounded": <bool>, "answer": "<string>"}.',
-        "Set grounded to false when no current passage supports the question.",
+        "grounded describes your answer, not the question. Set it to true whenever a "
+        "current passage supports what you wrote. Reporting that current policy sets "
+        "no such figure is itself a grounded answer when a current passage says so.",
+        "Set grounded to false only when no current passage speaks to the topic at all.",
         "Do not include a Sources block; citations are added separately.",
         "",
         f"Question: {question}",
@@ -402,17 +428,10 @@ def _build_prompt(question: str, cited: Sequence[_CitedHit]) -> str:
 
 
 def _parse_model_json(raw: str) -> tuple[bool, str]:
-    text = raw.strip()
+    text = _REASONING_BLOCK.sub("", raw).strip()
     if not text:
         raise GenerationError("Model returned an empty completion")
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError:
-        fenced = _strip_json_fence(text)
-        try:
-            payload = json.loads(fenced)
-        except json.JSONDecodeError as exc:
-            raise GenerationError("Model returned unparseable JSON") from exc
+    payload = _load_json_object(text)
     if not isinstance(payload, dict):
         raise GenerationError("Model JSON must be an object")
     if "grounded" not in payload or "answer" not in payload:
@@ -424,6 +443,70 @@ def _parse_model_json(raw: str) -> tuple[bool, str]:
     if not isinstance(answer, str):
         raise GenerationError("Model JSON answer must be a string")
     return grounded, answer.strip()
+
+
+def _load_json_object(text: str) -> Any:
+    """Parse the completion, tolerating a code fence or stray text around the object.
+
+    The schema is still checked by the caller, so a lenient search for the
+    object does not loosen what counts as a valid answer.
+
+    Raises:
+        GenerationError: If no candidate parses as JSON.
+    """
+    error: json.JSONDecodeError | None = None
+    for candidate in _json_candidates(text):
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            error = exc
+    snippet = text[:_RAW_SNIPPET_CHARS]
+    suffix = "..." if len(text) > _RAW_SNIPPET_CHARS else ""
+    raise GenerationError(f"Model returned unparseable JSON: {snippet!r}{suffix}") from error
+
+
+def _json_candidates(text: str) -> list[str]:
+    unfenced = _strip_json_fence(text)
+    candidates = [text, unfenced]
+    balanced = _first_json_object(unfenced)
+    if balanced is not None:
+        candidates.append(balanced)
+    return candidates
+
+
+def _first_json_object(text: str) -> str | None:
+    """Return the first brace-balanced object in ``text``, or None if there is none.
+
+    Counting braces is what separates this from a greedy match. Models append a
+    stray ``}`` or trail prose after the object, and spanning to the last brace
+    in the completion swallows that noise into the candidate.  Braces inside
+    string literals are skipped so an answer quoting ``{`` cannot end the scan.
+    """
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : index + 1]
+    return None
 
 
 def _strip_json_fence(text: str) -> str:

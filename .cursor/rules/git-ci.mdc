@@ -13,6 +13,7 @@ alwaysApply: false
 - Never commit `.venv/`, `.env`, `chroma/` persistence dirs, or model caches.
 - CI: Python 3.11+, cache pip, `ruff check`, `mypy src`,
   `pytest -m "not integration and not llm"` on every push. That job already
-  runs the eval harness tests. MiniLM, the cross-encoder, and a live LLM
-  stay behind `workflow_dispatch` so a pull request finishes in about a
-  minute. Fail the build on any error.
+  runs the eval harness tests and checks `eval/record.json`. MiniLM, the
+  cross-encoder, and a live LLM live in `.github/workflows/extras.yml`
+  (`workflow_dispatch` only) so they never appear as skipped on a PR.
+  Fail the build on any error.

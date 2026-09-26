@@ -23,3 +23,7 @@ class RetrievalError(RagLabError):
 
 class EvalError(RagLabError):
     """Raised when an evaluation label, citation, or metric input is invalid."""
+
+
+class GenerationError(RagLabError):
+    """Raised when answer generation config, the model call, or the reply is invalid."""

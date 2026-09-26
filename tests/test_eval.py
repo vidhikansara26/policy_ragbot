@@ -8,6 +8,8 @@ scorer and ``tmp_path`` so they do not download models or share the repo
 
 from __future__ import annotations
 
+import json
+import os
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -17,14 +19,21 @@ from rag_lab import config
 from rag_lab.chunking import chunk_corpus
 from rag_lab.corpus import load_corpus
 from rag_lab.eval import (
+    AnswerGold,
     EvalCase,
     EvalReport,
+    GoldPassage,
     RetrievalLabel,
+    answer_cases,
+    bind_answer_gold,
     bind_gold,
     evaluate,
+    evaluate_answers,
+    evaluate_retrieval,
     evaluation_cases,
 )
 from rag_lab.exceptions import EvalError
+from rag_lab.generate import generator_from_env
 from rag_lab.hybrid import HybridRetriever
 from rag_lab.index import PolicyIndex
 from rag_lab.rerank import RerankedHit, RerankingRetriever
@@ -443,3 +452,321 @@ def test_live_rerank_recall_and_answer_accuracy(tmp_path: Path) -> None:
         assert result.answer.doc_name
         assert result.answer.section
         assert result.answer.version
+
+
+class _ScriptedGenerator:
+    """Grounded answer facts, with optional overrides keyed by a prompt fragment."""
+
+    def __init__(self, overrides: dict[str, str] | None = None) -> None:
+        self._overrides = overrides or {}
+        self.calls = 0
+
+    def complete(self, prompt: str) -> str:
+        self.calls += 1
+        for fragment, completion in self._overrides.items():
+            if fragment in prompt:
+                return completion
+        for case in answer_cases():
+            if f"Question: {case.question}" in prompt:
+                if case.must_abstain:
+                    return _json_answer(grounded=False, answer="")
+                return _json_answer(grounded=True, answer=case.span.replace("**", ""))
+        raise AssertionError("prompt did not match a known question")
+
+
+class _StaticSearcher:
+    """Returns one fixed window for every question."""
+
+    def __init__(self, hits: Sequence[RerankedHit]) -> None:
+        self._hits = list(hits)
+
+    def search(self, query: str, *, k: int) -> list[RerankedHit]:
+        del query
+        return self._hits[:k]
+
+
+def _json_answer(*, grounded: bool, answer: str) -> str:
+    return json.dumps({"grounded": grounded, "answer": answer})
+
+
+def _boost_span_and_fact(
+    passages: Sequence[GoldPassage],
+    answers: Sequence[AnswerGold],
+    *,
+    abstain_score: float = -11.0,
+) -> Callable[[str, str], float]:
+    """Rank the retrieval span first, then the generation fact.
+
+    Abstain rows score below the relevance floor.
+    """
+    spans = {passage.question: passage.span for passage in passages}
+    facts = {row.question: row.fact for row in answers if not row.must_abstain}
+    abstain = {row.question for row in answers if row.must_abstain}
+
+    def score_for(query: str, text: str) -> float:
+        if query in abstain:
+            return abstain_score
+        if query in spans and spans[query] in text:
+            return 10.0
+        fact = facts.get(query, "")
+        if fact and fact in text:
+            return 9.0
+        return 0.0
+
+    return score_for
+
+
+def test_supported_set_keeps_ten_questions_and_separate_generation_gold() -> None:
+    cases = evaluation_cases()
+    assert len(cases) >= 10
+    fixture = next(case for case in cases if case.is_data_quality_fixture)
+    assert fixture.span == f"{config.LEGACY_PTO_DAYS} days of Privilege Leave (PTO)"
+    generated = answer_cases()
+    supported = [case for case in generated if not case.must_abstain]
+    assert len(supported) >= 10
+    assert [case.query_id for case in generated if case.must_abstain] == [
+        "out_of_domain_wifi",
+        "unsupported_ceo_phone",
+    ]
+    pto = next(case for case in generated if case.query_id == "pto_privilege_leave")
+    assert pto.question == fixture.question
+    assert pto.legacy_conflict is True
+    assert pto.span == "does not set a numeric Privilege Leave (PTO) entitlement"
+    assert pto.span != fixture.span
+    documents = load_corpus()
+    retrieval = bind_gold([fixture], documents)[0]
+    answer = bind_answer_gold([pto], documents)[0]
+    assert retrieval.status == "legacy"
+    assert retrieval.version == config.LEGACY_POLICY_VERSION
+    assert answer.status == "current"
+    assert answer.version == config.CURRENT_POLICY_VERSION
+    assert answer.fact == pto.span
+
+
+def test_generated_scores_are_separate_and_perfect_with_a_scripted_generator(
+    tmp_path: Path,
+) -> None:
+    """Recall@5 stays on the retrieval report. The other four checks score the published answer."""
+    documents = load_corpus()
+    retrieval_gold = bind_gold(evaluation_cases(), documents)
+    answer_gold = bind_answer_gold(answer_cases(), documents)
+    scorer = _RecordingScorer(_boost_span_and_fact(retrieval_gold, answer_gold))
+    index = PolicyIndex(tmp_path / "chroma", embedder=_LengthEmbedder())
+    try:
+        retriever = RerankingRetriever(HybridRetriever(index), scorer=scorer)
+        retriever.upsert(chunk_corpus(documents))
+        retrieval = evaluate_retrieval(retriever, retrieval_gold)
+        report = evaluate_answers(retriever, answer_gold, _ScriptedGenerator())
+    finally:
+        index.close()
+
+    assert report.k == config.EVAL_K
+    assert report.generated_key_fact == pytest.approx(1.0)
+    assert report.citation_complete == pytest.approx(1.0)
+    assert report.groundedness == pytest.approx(1.0)
+    assert report.conflict_handling == pytest.approx(1.0)
+    assert len(report.results) == len(answer_gold)
+
+    fixture = retrieval.by_id("pto_privilege_leave")
+    assert fixture.recall_at_k == 1.0
+    assert fixture.answer_correct is True
+    assert fixture.retrieval_label is RetrievalLabel.DATA_QUALITY_FIXTURE
+    assert f"{config.LEGACY_PTO_DAYS} days of Privilege Leave (PTO)" in fixture.answer.text
+
+    generated = report.by_id("pto_privilege_leave")
+    assert generated.key_fact_correct is True
+    assert f"{config.LEGACY_PTO_DAYS} days" not in generated.prose
+    assert "(legacy conflict)" in generated.published
+    assert "Fair Wages and Remuneration, v2.0" in generated.published
+    assert "Fair Wages and Remuneration, v1.0 (legacy conflict)" in generated.published
+
+    posh = report.by_id("posh_shrc_email")
+    assert "(legacy conflict)" not in posh.published
+    assert "shrc@coforge.com" in posh.prose
+
+    wifi = report.by_id("out_of_domain_wifi")
+    assert wifi.prose == "I cannot answer from the retrieved policies."
+    assert wifi.key_fact_correct is True
+    assert wifi.grounded is True
+    assert "- (none)" in wifi.published
+
+    refused = report.by_id("unsupported_ceo_phone")
+    assert refused.key_fact_correct is True
+    assert refused.grounded is True
+    assert refused.prose == "I cannot answer from the retrieved policies."
+
+
+def test_planted_day_count_fails_key_fact_and_conflict_handling() -> None:
+    """A published 15-day claim fails generation and leaves the v1 retrieval fixture intact."""
+    documents = load_corpus()
+    fixture = next(case for case in evaluation_cases() if case.is_data_quality_fixture)
+    retrieval_gold = bind_gold([fixture], documents)
+    passage = retrieval_gold[0]
+    answer_row = bind_answer_gold(
+        [case for case in answer_cases() if case.query_id == fixture.query_id],
+        documents,
+    )[0]
+    current = (
+        f"{answer_row.fact} {config.LEGACY_PTO_DAYS} days appears in this "
+        "current text only so the leak guard leaves the model sentence in place."
+    )
+    legacy = f"Full-time employees receive {passage.span} per calendar year."
+    hits = [
+        _hit(
+            "legacy",
+            legacy,
+            _meta(passage.doc_name, passage.section, passage.version, passage.status),
+            3.0,
+        ),
+        _hit(
+            "current",
+            current,
+            _meta(answer_row.doc_name, answer_row.section, answer_row.version, answer_row.status),
+            2.0,
+        ),
+    ]
+    answer = (
+        f"Employees receive {config.LEGACY_PTO_DAYS} days of Privilege Leave. {answer_row.fact}"
+    )
+    searcher = _StaticSearcher(hits)
+    generator = _ScriptedGenerator({fixture.question: _json_answer(grounded=True, answer=answer)})
+    report = evaluate_answers(searcher, [answer_row], generator)
+    row = report.by_id(fixture.query_id)
+    assert f"{config.LEGACY_PTO_DAYS} days" in row.prose
+    assert row.key_fact_correct is False
+    assert row.conflict_handled is False
+
+    retrieval = evaluate_retrieval(searcher, retrieval_gold)
+    retrieved = retrieval.by_id(fixture.query_id)
+    assert retrieved.recall_at_k == 1.0
+    assert retrieved.answer_correct is True
+    assert retrieved.retrieval_label is RetrievalLabel.DATA_QUALITY_FIXTURE
+    assert retrieval.answer_accuracy == pytest.approx(1.0)
+
+
+def test_wifi_abstains_without_calling_the_model() -> None:
+    """A negative-score distractor never reaches the scripted password."""
+    documents = load_corpus()
+    gold = bind_answer_gold(
+        [case for case in answer_cases() if case.query_id == "out_of_domain_wifi"],
+        documents,
+    )
+    wifi = _hit(
+        "privacy-wifi",
+        "Data privacy covers employee personal information, not office network credentials.",
+        _meta("Data Privacy Policy", "1. Scope", "1.0", "current"),
+        -11.2,
+    )
+    generator = _ScriptedGenerator(
+        {"Wi-Fi": _json_answer(grounded=True, answer="The password is posted in the lobby.")}
+    )
+    report = evaluate_answers(_StaticSearcher([wifi]), gold, generator)
+    row = report.by_id("out_of_domain_wifi")
+    assert generator.calls == 0
+    assert row.prose == "I cannot answer from the retrieved policies."
+    assert "password" not in row.prose
+    assert row.key_fact_correct is True
+    assert row.grounded is True
+    assert row.conflict_handled is True
+    assert row.citation_complete is True
+    assert row.published.endswith("Sources:\n- (none)\n")
+
+
+def test_refusing_a_supported_question_fails_key_fact_and_groundedness(
+    tmp_path: Path,
+) -> None:
+    documents = load_corpus()
+    retrieval_gold = bind_gold(evaluation_cases(), documents)
+    answer_gold = bind_answer_gold(answer_cases(), documents)
+    generator = _ScriptedGenerator({"net zero": _json_answer(grounded=False, answer="")})
+    index = PolicyIndex(tmp_path / "chroma", embedder=_LengthEmbedder())
+    try:
+        retriever = RerankingRetriever(
+            HybridRetriever(index),
+            scorer=_RecordingScorer(_boost_span_and_fact(retrieval_gold, answer_gold)),
+        )
+        retriever.upsert(chunk_corpus(documents))
+        report = evaluate_answers(retriever, answer_gold, generator)
+    finally:
+        index.close()
+
+    missed = report.by_id("ehs_net_zero")
+    assert missed.key_fact_correct is False
+    assert missed.grounded is False
+    assert report.generated_key_fact < 1.0
+    assert report.groundedness < 1.0
+
+
+def test_invented_phone_number_is_not_published(tmp_path: Path) -> None:
+    """A grounded=true invention is dropped. The refusal row stays the abstain sentence."""
+    documents = load_corpus()
+    retrieval_gold = bind_gold(evaluation_cases(), documents)
+    answer_gold = bind_answer_gold(answer_cases(), documents)
+    generator = _ScriptedGenerator(
+        {
+            "Coforge CEO": _json_answer(
+                grounded=True,
+                answer="The CEO personal mobile number is 5551234567.",
+            )
+        }
+    )
+    index = PolicyIndex(tmp_path / "chroma", embedder=_LengthEmbedder())
+    try:
+        retriever = RerankingRetriever(
+            HybridRetriever(index),
+            scorer=_RecordingScorer(
+                _boost_span_and_fact(retrieval_gold, answer_gold, abstain_score=0.0)
+            ),
+        )
+        retriever.upsert(chunk_corpus(documents))
+        report = evaluate_answers(retriever, answer_gold, generator)
+    finally:
+        index.close()
+
+    refused = report.by_id("unsupported_ceo_phone")
+    assert generator.calls >= 1
+    assert refused.prose == "I cannot answer from the retrieved policies."
+    assert "5551234567" not in refused.prose
+    assert refused.grounded is True
+    assert refused.key_fact_correct is True
+
+
+@pytest.mark.integration
+def test_live_generator_pto_conflict_row() -> None:
+    """One live answer. Skip when OpenAI is not configured."""
+    if not os.environ.get(config.LLM_API_KEY_ENV, "").strip():
+        pytest.skip("OPENAI_API_KEY is unset")
+    if not os.environ.get(config.LLM_MODEL_ENV, "").strip():
+        pytest.skip(f"{config.LLM_MODEL_ENV} is unset")
+
+    documents = load_corpus()
+    fixture = next(case for case in evaluation_cases() if case.is_data_quality_fixture)
+    passage = bind_gold([fixture], documents)[0]
+    answer_row = bind_answer_gold(
+        [case for case in answer_cases() if case.query_id == fixture.query_id],
+        documents,
+    )[0]
+    current = (
+        "This current policy does not set a numeric Privilege Leave (PTO) entitlement. "
+        "Leave follows local employment law."
+    )
+    legacy = f"Full-time employees are entitled to {passage.span} per calendar year."
+    hits = [
+        _hit(
+            "hr-v2",
+            current,
+            _meta(answer_row.doc_name, answer_row.section, answer_row.version, answer_row.status),
+            2.0,
+        ),
+        _hit(
+            "hr-v1",
+            legacy,
+            _meta(passage.doc_name, passage.section, passage.version, passage.status),
+            1.0,
+        ),
+    ]
+    report = evaluate_answers(_StaticSearcher(hits), [answer_row], generator_from_env())
+    row = report.by_id(fixture.query_id)
+    assert f"{config.LEGACY_PTO_DAYS} days" not in row.published
+    assert answer_row.fact in row.prose or "does not specify a numeric" in row.prose
+    assert "(legacy conflict)" in row.published

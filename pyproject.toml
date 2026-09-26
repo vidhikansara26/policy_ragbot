@@ -15,6 +15,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11"]
+llm = ["openai>=1.40"]
 
 [project.scripts]
 rag-lab = "rag_lab.cli:main"
@@ -49,6 +50,8 @@ module = [
     "chromadb.*",
     "numpy",
     "numpy.*",
+    "openai",
+    "openai.*",
 ]
 ignore_missing_imports = true
 follow_imports = "skip"

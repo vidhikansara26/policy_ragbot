@@ -95,6 +95,14 @@ RERANK_BATCH_SIZE: int = 32
 # receives k.
 RERANK_CANDIDATE_K: int = 20
 
+# MS MARCO logits. Captured window: Wi-Fi / out-of-domain sits near -11;
+# Privilege Leave clauses sit about +2 to +6. 0.0 drops the negative
+# tail and keeps those clauses. Compared in safety.py, not in search().
+MIN_RERANK_SCORE: float = 0.0
+# A query with fewer than this many alphanumeric tokens must contain
+# that token in the chunk. "PTO" is one token; supplier "leave" is not.
+SHORT_QUERY_MAX_TOKENS: int = 2
+
 # Recall@K uses the window search() returns after rerank, which is
 # RETRIEVE_K (5). RERANK_CANDIDATE_K (20) is only the pool that gets
 # rescored. A passage the cross-encoder left outside those five never
@@ -114,3 +122,11 @@ LEGACY_POLICY_VERSION: str = "1.0"
 LEGACY_PTO_DAYS: int = 15
 CURRENT_HR_COMPLAINTS_EMAIL: str = "All.HR@coforge.com"
 LEGACY_HR_COMPLAINTS_EMAIL: str = "hr.helpdesk@niit-tech.com"
+
+# Live answers use the OpenAI SDK (optional extra ``llm``). The key and model
+# tag are never hard-coded; generator_from_env() reads them from the environment.
+LLM_API_KEY_ENV: str = "OPENAI_API_KEY"
+LLM_MODEL_ENV: str = "RAG_LAB_LLM_MODEL"
+# Temperature 0 keeps the grounded JSON contract stable.
+LLM_TEMPERATURE: float = 0.0
+LLM_TIMEOUT_SECONDS: float = 120.0

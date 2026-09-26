@@ -24,16 +24,26 @@ is labeled ``data_quality_fixture``. Retrieving the planted clause is the
 incident the index is supposed to surface, not a failed retrieval. Failing
 to retrieve it is still a miss. Answer accuracy on that row only says the
 top passage is the v1 clause from the file. It does not say 15 days is the
-current entitlement. The current wording is its own question. Which of the
-two an answer should have used is the next diagnosis step, not this score.
+current entitlement. Generation gold for that same question is a second
+record: the current wording, plus a requirement to cite v2 and flag v1.
 
-The answer is extractive. No generator is called. The rank-1 chunk text is
-the answer, and it must carry doc name, section, and version.
+``evaluate_retrieval`` is extractive. It does not call a generator. The
+rank-1 chunk text is the answer, and it must carry doc name, section, and
+version. ``evaluate`` is the same function.
+
+``evaluate_answers`` is a second scoreboard. It calls
+:func:`~rag_lab.generate.generate_answer` on the same window and scores
+key-fact accuracy, citation completeness, groundedness, and legacy/current
+conflict handling. Those checks are not folded into ``answer_accuracy``
+and they do not change Recall@K. On Privilege Leave, rank-1 accuracy means
+v1 was retrieved. Key-fact accuracy means the published prose used the
+current wording and did not state the planted day count.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -43,6 +53,7 @@ from rag_lab.chunking import Chunk, chunk_document
 from rag_lab.config import EVAL_K, LEGACY_PTO_DAYS
 from rag_lab.corpus import Document
 from rag_lab.exceptions import EvalError
+from rag_lab.generate import ABSTAIN_TEXT, TextGenerator, generate_answer, render_answer
 from rag_lab.rerank import RerankedHit
 
 logger = logging.getLogger(__name__)
@@ -97,6 +108,41 @@ class EvalCase:
 
 
 @dataclass(frozen=True)
+class AnswerCase:
+    """Generation gold before :func:`bind_answer_gold` reads the source file.
+
+    A ``must_abstain`` row has no span and is not a retrieval label. The
+    Privilege Leave row sets ``legacy_conflict`` so the published answer must
+    cite the current policy and flag the legacy line.
+
+    Raises:
+        EvalError: If the id or question is blank, or span and abstain disagree.
+    """
+
+    query_id: str
+    question: str
+    span: str = ""
+    must_abstain: bool = False
+    legacy_conflict: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.query_id.strip():
+            raise EvalError("Answer case query_id is empty")
+        if not self.question.strip():
+            raise EvalError(f"Answer case {self.query_id!r} has an empty question")
+        if self.must_abstain:
+            if self.span.strip():
+                raise EvalError(f"Answer case {self.query_id!r} abstains and cannot carry a span")
+            if self.legacy_conflict:
+                raise EvalError(
+                    f"Answer case {self.query_id!r} abstains and cannot be a legacy conflict"
+                )
+            return
+        if not self.span.strip():
+            raise EvalError(f"Answer case {self.query_id!r} has an empty gold span")
+
+
+@dataclass(frozen=True)
 class GoldPassage:
     """One supporting passage resolved from a source file and its chunk."""
 
@@ -109,6 +155,22 @@ class GoldPassage:
     span: str
     source_file: str
     is_data_quality_fixture: bool
+
+
+@dataclass(frozen=True)
+class AnswerGold:
+    """One generation label. Abstain rows have an empty fact and no citation."""
+
+    query_id: str
+    question: str
+    fact: str
+    must_abstain: bool
+    legacy_conflict: bool
+    doc_name: str
+    section: str
+    version: str
+    status: str
+    source_file: str
 
 
 @dataclass(frozen=True)
@@ -217,8 +279,7 @@ _EVAL_CASES: tuple[EvalCase, ...] = (
     EvalCase(
         query_id="pto_current_no_numeric_entitlement",
         question=(
-            "Does the current Human Rights Policy set a numeric "
-            "Privilege Leave (PTO) entitlement?"
+            "Does the current Human Rights Policy set a numeric Privilege Leave (PTO) entitlement?"
         ),
         span="does not set a numeric Privilege Leave (PTO) entitlement",
     ),
@@ -230,8 +291,7 @@ _EVAL_CASES: tuple[EvalCase, ...] = (
     EvalCase(
         query_id="posh_complaint_deadline",
         question=(
-            "Within how many months must a sexual harassment complaint "
-            "be reported to the SHRC?"
+            "Within how many months must a sexual harassment complaint be reported to the SHRC?"
         ),
         span="within three months",
     ),
@@ -270,6 +330,22 @@ _EVAL_CASES: tuple[EvalCase, ...] = (
     ),
 )
 
+# Generation gold for the same Privilege Leave question. Retrieval keeps the
+# v1 day-count span. This span is the current policy and binds to v2 only.
+_NO_NUMERIC_FACT = "does not set a numeric Privilege Leave (PTO) entitlement"
+# Leak-guard sentence in generate.py. It restates the v2 span.
+_GUARD_PTO_FACT = "does not specify a numeric PTO allowance"
+_WIFI_QUESTION = "What is the Wi-Fi password?"
+_CEO_QUESTION = "What is the personal mobile number of the Coforge CEO?"
+
+# Same sentence as generate.ABSTAIN_TEXT. A supported question that returns it
+# failed to answer. An unsupported question must return it.
+_UNGROUNDED_REFUSAL = ABSTAIN_TEXT
+_LEGACY_CONFLICT_MARK = " (legacy conflict)"
+_SECTION_NUMBER_PREFIX = re.compile(r"^\d+\.\s+")
+_PHONE_DIGITS = re.compile(r"\d{7,}")
+_NONE_SOURCE = "- (none)"
+
 
 def evaluation_cases() -> tuple[EvalCase, ...]:
     """Return the production query set (8 or more), including the PTO fixture.
@@ -287,6 +363,141 @@ def evaluation_cases() -> tuple[EvalCase, ...]:
             f"Eval set has {len(fixtures)} data-quality fixtures; exactly one is required"
         )
     return _EVAL_CASES
+
+
+def answer_cases() -> tuple[AnswerCase, ...]:
+    """Return generation gold, including abstentions.
+
+    The ten retrieval questions are reused. Privilege Leave's fact is the
+    current no-numeric wording, with ``legacy_conflict`` set. ``out_of_domain_wifi``
+    and ``unsupported_ceo_phone`` must abstain and are not retrieval rows.
+
+    Raises:
+        EvalError: If the supported set has fewer than 10 questions, ids or
+            questions repeat, or the Privilege Leave conflict row is missing.
+    """
+    rows: list[AnswerCase] = []
+    for case in _EVAL_CASES:
+        if case.query_id == "pto_privilege_leave":
+            rows.append(
+                AnswerCase(
+                    query_id=case.query_id,
+                    question=case.question,
+                    span=_NO_NUMERIC_FACT,
+                    legacy_conflict=True,
+                )
+            )
+        else:
+            rows.append(
+                AnswerCase(
+                    query_id=case.query_id,
+                    question=case.question,
+                    span=case.span,
+                )
+            )
+    rows.extend(
+        (
+            AnswerCase(
+                query_id="out_of_domain_wifi",
+                question=_WIFI_QUESTION,
+                must_abstain=True,
+            ),
+            AnswerCase(
+                query_id="unsupported_ceo_phone",
+                question=_CEO_QUESTION,
+                must_abstain=True,
+            ),
+        )
+    )
+    cases = tuple(rows)
+    _validate_answer_cases(cases)
+    return cases
+
+
+def _validate_answer_cases(cases: Sequence[AnswerCase]) -> None:
+    supported = [case for case in cases if not case.must_abstain]
+    if len(supported) < 10:
+        raise EvalError(
+            f"Answer set has {len(supported)} supported questions; at least 10 are required"
+        )
+    ids = [case.query_id for case in cases]
+    if len(ids) != len(set(ids)):
+        raise EvalError("Duplicate answer query_id")
+    questions = [case.question for case in cases]
+    if len(questions) != len(set(questions)):
+        raise EvalError("Duplicate answer question")
+    conflicts = [case for case in cases if case.legacy_conflict]
+    if len(conflicts) != 1 or conflicts[0].query_id != "pto_privilege_leave":
+        raise EvalError("Answer set must mark pto_privilege_leave as the only legacy conflict")
+    abstain_ids = {case.query_id for case in cases if case.must_abstain}
+    if abstain_ids != {"out_of_domain_wifi", "unsupported_ceo_phone"}:
+        raise EvalError(f"Unexpected abstain rows: {sorted(abstain_ids)}")
+
+
+def bind_answer_gold(
+    cases: Sequence[AnswerCase],
+    documents: Sequence[Document],
+) -> tuple[AnswerGold, ...]:
+    """Resolve generation spans against ``documents``. Abstain rows are not bound.
+
+    Privilege Leave binds the current no-numeric span, not the v1 day count.
+    ``status=legacy`` is not skipped for any other span that happens to live
+    only in a legacy file.
+
+    Raises:
+        EvalError: If ``cases`` is empty, ids repeat, a supported span is
+            missing or ambiguous, or a legacy-conflict row does not bind to
+            ``status=current``.
+    """
+    if not cases:
+        raise EvalError("Cannot bind answer gold for an empty query set")
+    ids = [case.query_id for case in cases]
+    if len(ids) != len(set(ids)):
+        raise EvalError("Duplicate query_id in answer cases")
+    supported = [case for case in cases if not case.must_abstain]
+    if supported and not documents:
+        raise EvalError("Cannot bind answer gold against an empty corpus")
+    bound: list[AnswerGold] = []
+    for case in cases:
+        if case.must_abstain:
+            bound.append(
+                AnswerGold(
+                    query_id=case.query_id,
+                    question=case.question,
+                    fact="",
+                    must_abstain=True,
+                    legacy_conflict=False,
+                    doc_name="",
+                    section="",
+                    version="",
+                    status="",
+                    source_file="",
+                )
+            )
+            continue
+        passage = _bind_one(
+            EvalCase(query_id=case.query_id, question=case.question, span=case.span),
+            documents,
+        )
+        if case.legacy_conflict and passage.status != "current":
+            raise EvalError(
+                f"{case.query_id!r} legacy conflict bound status={passage.status}, expected current"
+            )
+        bound.append(
+            AnswerGold(
+                query_id=case.query_id,
+                question=case.question,
+                fact=_plain(case.span),
+                must_abstain=False,
+                legacy_conflict=case.legacy_conflict,
+                doc_name=passage.doc_name,
+                section=passage.section,
+                version=passage.version,
+                status=passage.status,
+                source_file=passage.source_file,
+            )
+        )
+    return tuple(bound)
 
 
 def bind_gold(
@@ -310,7 +521,7 @@ def bind_gold(
     return tuple(_bind_one(case, documents) for case in cases)
 
 
-def evaluate(
+def evaluate_retrieval(
     retriever: Searcher,
     gold: Sequence[GoldPassage],
     *,
@@ -349,6 +560,9 @@ def evaluate(
     return report
 
 
+evaluate = evaluate_retrieval
+
+
 def _require_unique(cases: Sequence[EvalCase]) -> None:
     ids = [case.query_id for case in cases]
     if len(ids) != len(set(ids)):
@@ -377,9 +591,7 @@ def _bind_one(case: EvalCase, documents: Sequence[Document]) -> GoldPassage:
     chunk = chunks[0]
     doc_name, section, version, status = _citation(chunk.metadata, chunk_id=chunk.chunk_id)
     if doc_name != document.doc_name or version != document.version or status != document.status:
-        raise EvalError(
-            f"Chunk {chunk.chunk_id} drifted from {document.path.name} metadata"
-        )
+        raise EvalError(f"Chunk {chunk.chunk_id} drifted from {document.path.name} metadata")
     if case.is_data_quality_fixture and status != "legacy":
         raise EvalError(
             f"{case.query_id!r} is marked as the data-quality fixture but "
@@ -512,10 +724,7 @@ def _note(
     label: RetrievalLabel,
     k: int,
 ) -> str:
-    cited = (
-        f"Answer cited {answer.doc_name} version {answer.version}, "
-        f"section {answer.section!r}."
-    )
+    cited = f"Answer cited {answer.doc_name} version {answer.version}, section {answer.section!r}."
     if label is RetrievalLabel.DATA_QUALITY_FIXTURE:
         return (
             f"Retrieved {gold.doc_name} version {gold.version}, "
@@ -525,11 +734,342 @@ def _note(
         )
     if label is RetrievalLabel.HIT:
         return (
-            f"Retrieved {gold.doc_name} version {gold.version}, "
-            f"section {gold.section!r}. {cited}"
+            f"Retrieved {gold.doc_name} version {gold.version}, section {gold.section!r}. {cited}"
         )
     return (
         f"{gold.doc_name} version {gold.version} was not in the top {k}. "
         "Missing the supporting passage is a retrieval miss. "
         f"{cited}"
     )
+
+
+@dataclass(frozen=True)
+class AnswerQueryEval:
+    """One generated answer. Recall is not scored here."""
+
+    query_id: str
+    question: str
+    k: int
+    key_fact_correct: bool
+    citation_complete: bool
+    grounded: bool
+    conflict_handled: bool
+    published: str
+    prose: str
+    abstained: bool
+
+
+@dataclass(frozen=True)
+class AnswerEvalReport:
+    """Generated-answer scoreboard. Each aggregate is its own fraction.
+
+    Raises:
+        EvalError: If ``k`` is not positive or ``results`` is empty.
+    """
+
+    k: int
+    results: tuple[AnswerQueryEval, ...]
+
+    def __post_init__(self) -> None:
+        if self.k <= 0:
+            raise EvalError(f"Invalid k={self.k}")
+        if not self.results:
+            raise EvalError("Answer evaluation report has no queries")
+
+    def by_id(self, query_id: str) -> AnswerQueryEval:
+        """Return the single generated result for ``query_id``.
+
+        Raises:
+            EvalError: If ``query_id`` is missing or duplicated.
+        """
+        matches = [result for result in self.results if result.query_id == query_id]
+        if len(matches) != 1:
+            raise EvalError(f"Unknown query_id {query_id!r}")
+        return matches[0]
+
+    @property
+    def generated_key_fact(self) -> float:
+        """Fraction of answers that state the required fact or correctly abstain."""
+        return _fraction([row.key_fact_correct for row in self.results], label="key-fact accuracy")
+
+    @property
+    def citation_complete(self) -> float:
+        """Fraction of rows whose used Sources lines carry doc, section, and version."""
+        return _fraction(
+            [row.citation_complete for row in self.results],
+            label="citation completeness",
+        )
+
+    @property
+    def groundedness(self) -> float:
+        """Fraction of rows with no claim absent from the prompt chunks."""
+        return _fraction([row.grounded for row in self.results], label="groundedness")
+
+    @property
+    def conflict_handling(self) -> float:
+        """Fraction of rows that cite v2 and flag v1 only when that conflict is real."""
+        return _fraction([row.conflict_handled for row in self.results], label="conflict handling")
+
+
+def evaluate_answers(
+    retriever: Searcher,
+    gold: Sequence[AnswerGold],
+    generator: TextGenerator,
+    *,
+    k: int = EVAL_K,
+) -> AnswerEvalReport:
+    """Score published answers. This does not compute Recall@K.
+
+    ``retriever`` supplies the window ``generate_answer`` sees. Metrics read
+    :attr:`~rag_lab.generate.GeneratedAnswer.text` and
+    :func:`~rag_lab.generate.render_answer`. A refusal of the planted day
+    count cannot change a retrieval report.
+
+    Raises:
+        EvalError: If ``k`` is invalid, ids collide, a supported window is
+            empty, or the published answer has no Sources block.
+        GenerationError: If the generator returns unusable text.
+        RetrievalError: If ``retriever`` rejects a question.
+    """
+    if k <= 0:
+        raise EvalError(f"Invalid k={k}")
+    if not gold:
+        raise EvalError("Cannot evaluate an empty gold set")
+    ids = [row.query_id for row in gold]
+    if len(ids) != len(set(ids)):
+        raise EvalError("Duplicate query_id in answer gold")
+
+    results: list[AnswerQueryEval] = []
+    for row in gold:
+        hits = _search_hits(
+            retriever,
+            row.question,
+            query_id=row.query_id,
+            k=k,
+            allow_empty=row.must_abstain,
+        )
+        generated = generate_answer(row.question, hits, generator)
+        published = render_answer(generated)
+        prose, sources = _split_published(published, query_id=row.query_id)
+        results.append(
+            _score_answer(
+                row,
+                hits,
+                published=published,
+                prose=prose,
+                sources=sources,
+                abstained=generated.abstained,
+                k=k,
+            )
+        )
+    report = AnswerEvalReport(k=k, results=tuple(results))
+    logger.info(
+        "Answer eval k=%s key_fact=%.3f citation=%.3f grounded=%.3f conflict=%.3f cases=%s",
+        report.k,
+        report.generated_key_fact,
+        report.citation_complete,
+        report.groundedness,
+        report.conflict_handling,
+        len(report.results),
+    )
+    return report
+
+
+def _plain(text: str) -> str:
+    return text.replace("**", "").strip()
+
+
+def _fraction(flags: Sequence[bool], *, label: str) -> float:
+    if not flags:
+        raise EvalError(f"No rows to score {label}")
+    return sum(1 for flag in flags if flag) / len(flags)
+
+
+def _search_hits(
+    retriever: Searcher,
+    question: str,
+    *,
+    query_id: str,
+    k: int,
+    allow_empty: bool,
+) -> list[RerankedHit]:
+    hits = list(retriever.search(question, k=k))[:k]
+    if not hits and not allow_empty:
+        raise EvalError(
+            f"Query {query_id!r} returned no passages; cannot cite doc name, section, and version"
+        )
+    return hits
+
+
+def _split_published(published: str, *, query_id: str) -> tuple[str, list[str]]:
+    marker = "\nSources:\n"
+    if marker not in published:
+        raise EvalError(f"Query {query_id!r} published answer has no Sources block")
+    prose, _, tail = published.partition(marker)
+    sources = [line for line in tail.splitlines() if line.strip()]
+    return prose.strip(), sources
+
+
+def _score_answer(
+    gold: AnswerGold,
+    hits: Sequence[RerankedHit],
+    *,
+    published: str,
+    prose: str,
+    sources: list[str],
+    abstained: bool,
+    k: int,
+) -> AnswerQueryEval:
+    return AnswerQueryEval(
+        query_id=gold.query_id,
+        question=gold.question,
+        k=k,
+        key_fact_correct=_key_fact(gold, prose),
+        citation_complete=_citations_complete(sources, abstained=abstained),
+        grounded=_grounded(gold, prose, hits),
+        conflict_handled=_conflict_handled(gold, prose, sources, hits),
+        published=published,
+        prose=prose,
+        abstained=abstained,
+    )
+
+
+def _key_fact(gold: AnswerGold, prose: str) -> bool:
+    """Required fact is present, or the row correctly abstains."""
+    if gold.must_abstain:
+        return prose == _UNGROUNDED_REFUSAL
+    plain = _plain(prose)
+    planted = f"{LEGACY_PTO_DAYS} days"
+    if gold.fact == _NO_NUMERIC_FACT and planted in prose:
+        return False
+    if gold.fact in plain:
+        return True
+    return gold.fact == _NO_NUMERIC_FACT and _GUARD_PTO_FACT in plain
+
+
+def _current_text(hits: Sequence[RerankedHit]) -> str:
+    return _plain(
+        "\n".join(hit.text for hit in hits if hit.metadata.get("status", "").strip() == "current")
+    )
+
+
+def _grounded(gold: AnswerGold, prose: str, hits: Sequence[RerankedHit]) -> bool:
+    """Unsupported questions pass only by abstaining. Supported claims must be in current chunks."""
+    if gold.must_abstain:
+        return prose == _UNGROUNDED_REFUSAL
+    if prose == _UNGROUNDED_REFUSAL:
+        return False
+    current = _current_text(hits)
+    planted = f"{LEGACY_PTO_DAYS} days"
+    if planted in prose and planted not in current:
+        return False
+    if _unsupported_digits(prose, current):
+        return False
+    if gold.fact == _NO_NUMERIC_FACT and _GUARD_PTO_FACT in prose and gold.fact in current:
+        return True
+    return gold.fact in current and gold.fact in _plain(prose)
+
+
+def _unsupported_digits(prose: str, current: str) -> bool:
+    return any(number not in current for number in _PHONE_DIGITS.findall(prose))
+
+
+def _section_key(section: str) -> str:
+    """Group ``3. Fair Wages…`` with ``5. Fair Wages…``. Citations keep the raw string."""
+    return _SECTION_NUMBER_PREFIX.sub("", section.strip())
+
+
+def _citations_complete(sources: list[str], *, abstained: bool) -> bool:
+    """Every used source has doc, section, and version.
+
+    A window with no used sources is complete only when the answer abstained.
+    """
+    if not sources or sources == [_NONE_SOURCE]:
+        return abstained
+    if any(line == _NONE_SOURCE for line in sources):
+        return False
+    return all(_parse_source_line(line) is not None for line in sources)
+
+
+def _parse_source_line(line: str) -> tuple[str, str, str, bool] | None:
+    """Parse ``- Doc, Section, v1.0`` with an optional legacy-conflict suffix."""
+    conflict = line.endswith(_LEGACY_CONFLICT_MARK)
+    body = line[: -len(_LEGACY_CONFLICT_MARK)] if conflict else line
+    if not body.startswith("- "):
+        return None
+    body = body[2:]
+    marker = ", v"
+    index = body.rfind(marker)
+    if index == -1:
+        return None
+    version = body[index + len(marker) :]
+    if not version or any(character.isspace() for character in version):
+        return None
+    head = body[:index]
+    doc_name, separator, section = head.partition(", ")
+    if not separator or not doc_name.strip() or not section.strip():
+        return None
+    return doc_name, section, version, conflict
+
+
+def _conflict_handled(
+    gold: AnswerGold,
+    prose: str,
+    sources: Sequence[str],
+    hits: Sequence[RerankedHit],
+) -> bool:
+    """Privilege Leave must cite v2 and flag v1. Any other row must not invent that flag."""
+    if gold.legacy_conflict:
+        return _pto_conflict(gold, prose, sources, hits)
+    return _window_conflict(sources, hits)
+
+
+def _pto_conflict(
+    gold: AnswerGold,
+    prose: str,
+    sources: Sequence[str],
+    hits: Sequence[RerankedHit],
+) -> bool:
+    """Do not state 15 days. Cite the current line and flag the legacy sibling."""
+    if f"{LEGACY_PTO_DAYS} days" in prose:
+        return False
+    current_line = f"- {gold.doc_name}, {gold.section}, v{gold.version}"
+    if current_line not in sources:
+        return False
+    for hit in hits:
+        doc_name = hit.metadata.get("doc_name", "").strip()
+        section = hit.metadata.get("section", "").strip()
+        version = hit.metadata.get("version", "").strip()
+        status = hit.metadata.get("status", "").strip()
+        if status != "legacy" or doc_name != gold.doc_name or not section or not version:
+            continue
+        expected = f"- {doc_name}, {section}, v{version}{_LEGACY_CONFLICT_MARK}"
+        if expected in sources:
+            return True
+    return False
+
+
+def _window_conflict(sources: Sequence[str], hits: Sequence[RerankedHit]) -> bool:
+    """A current/legacy sibling pair must be marked. Any other window must not be."""
+    groups: dict[tuple[str, str], set[str]] = {}
+    for hit in hits:
+        doc_name = hit.metadata.get("doc_name", "").strip()
+        section = hit.metadata.get("section", "").strip()
+        status = hit.metadata.get("status", "").strip()
+        groups.setdefault((doc_name, _section_key(section)), set()).add(status)
+    conflict_keys = {key for key, statuses in groups.items() if {"current", "legacy"} <= statuses}
+    if not conflict_keys:
+        return all(_LEGACY_CONFLICT_MARK not in line for line in sources)
+    for hit in hits:
+        if hit.metadata.get("status", "").strip() != "legacy":
+            continue
+        doc_name = hit.metadata.get("doc_name", "").strip()
+        section = hit.metadata.get("section", "").strip()
+        key = (doc_name, _section_key(section))
+        if key not in conflict_keys:
+            continue
+        version = hit.metadata.get("version", "").strip()
+        expected = f"- {doc_name}, {section}, v{version}{_LEGACY_CONFLICT_MARK}"
+        if expected not in sources:
+            return False
+    return True

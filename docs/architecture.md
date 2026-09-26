@@ -2,8 +2,8 @@
 
 Status: Corpus, hierarchical chunking, the dense retrieve loop (MiniLM +
 Chroma cosine), hybrid search (BM25 + Reciprocal Rank Fusion), cross-encoder
-reranking, and the evaluation harness are in production code. Incident
-diagnosis stays blocked until the eval tests are green.
+reranking, the evaluation harness, and grounded LLM answer generation are in
+production code. Incident diagnosis stays blocked until the next capability.
 
 Enterprise policy assistant over **versioned Coforge investor policies**, with a
 **known data-quality fixture** (stale Human Rights v1) so retrieval can surface
@@ -19,12 +19,15 @@ data/raw/*.md
     → BM25 + RRF             # hybrid search
     → cross-encoder rerank   # fused top-20 rescored, top-5 returned
     → eval harness           # Recall@K and answer accuracy, K = 5
+    → safety screen          # drop score < 0; current before legacy (generation only)
+    → generate + cite        # grounded JSON answer + code-built Sources
     → 2-question diagnosis   # next capability
-    → generate + cite
     → GitHub Actions CI
 ```
 
-**Gate:** `tests/test_minimal_loop.py`, `tests/test_hybrid.py`, and `tests/test_rerank.py` are green. Incident diagnosis stays off until `tests/test_eval.py` is green.
+**Gate:** `tests/test_minimal_loop.py`, `tests/test_hybrid.py`, `tests/test_rerank.py`,
+and `tests/test_eval.py` are green. Generation unit tests live in
+`tests/test_generate.py`. Incident diagnosis is the next capability.
 
 ## 1. Pipeline slice
 
@@ -189,13 +192,59 @@ The model score replaces the order. It is not added to `rrf_score`. RRF values s
 
 K is 5 because that is the window `search` returns. The cross-encoder rescores 20 fused hits so it can promote a passage into those five. A hit it then leaves at rank 6 is not something the caller sees. Recall at 20 would count that discarded passage as a success. Each question has one supporting passage, so per-query recall is 0 or 1. `mean_recall_at_k` is the average. `answer_accuracy` is the fraction of rank-1 answers that match. A gold passage at rank 3 is recall 1 and accuracy 0.
 
-The answer is extractive: the rank-1 chunk text, which must carry doc name, section, and version. No generator is called.
+`evaluate_retrieval` (`evaluate`) is extractive: the rank-1 chunk text, which must carry doc name, section, and version. It does not call a generator. `evaluate_answers` is a second scoreboard on the same window and a separate gold set. It calls `generate_answer` and records four checks that are not folded into `answer_accuracy` and do not change Recall@K:
+
+| Check | What it measures |
+|-------|------------------|
+| Key-fact accuracy | The published prose states the required fact, or the row correctly abstains. Privilege Leave expects the current "does not set a numeric" wording (the leak-guard sentence counts). `15 days` in that prose fails the row. |
+| Citation completeness | Every used Sources line has doc name, section, and version. Zero citations is complete only when the answer abstained. |
+| Groundedness | A supported fact appears in a current hit and the prose adds no `15 days` or long digit string those chunks lack. Wi-Fi and the CEO-phone question pass only by abstaining. |
+| Conflict handling | Privilege Leave must cite Human Rights v2 with no legacy suffix and flag the v1 line `(legacy conflict)`, and must not state `15 days`. Any other window uses that marker only for a real current/legacy sibling. |
+
+The official supported set stays 10 questions. Two extra abstain rows, `out_of_domain_wifi` and `unsupported_ceo_phone`, have no retrieval span. Rank-1 accuracy on `pto_privilege_leave` still means Human Rights v1 was the top chunk. Key-fact accuracy on that same question means the published answer used the current policy.
 
 Gold labels are verbatim spans. `bind_gold` requires the span to occur in exactly one file under `data/raw`, intact in one chunk section, and then copies `doc_name`, `section`, `version`, and `status` from that file. A span that is missing or ambiguous raises `EvalError`. The official set has 10 questions: the Human Rights v1/v2 Privilege Leave conflict, POSH (SHRC mailbox and the three-month complaint window), whistleblower (channel and acknowledgement), EHS (net zero and the annual committee review), modern-slavery training, and Independent Director tenure.
 
-`status=legacy` is not filtered while binding gold or while scoring the window. The PTO question's supporting passage is Human Rights Policy v1, section "3. Fair Wages and Remuneration", the 15-day clause. When that passage is inside the five, the row is labeled `data_quality_fixture`. Retrieving the planted clause is the incident the index is built to surface, not a failed retrieval. The row still counts toward both means. Answer accuracy on that row only says the top passage is the v1 clause from the file. It does not say 15 days is current policy. The current wording ("does not set a numeric Privilege Leave (PTO) entitlement") is a separate question against v2. Which of the two an answer should have used is the next diagnosis step.
+`status=legacy` is not filtered while binding gold or while scoring the window. The PTO question's retrieval passage is Human Rights Policy v1, section "3. Fair Wages and Remuneration", the 15-day clause. When that passage is inside the five, the row is labeled `data_quality_fixture`. Retrieving the planted clause is the incident the index is built to surface, not a failed retrieval. The row still counts toward both retrieval means. Extractive accuracy on that row only says the top passage is the v1 clause from the file. It does not say 15 days is current policy. Generation gold for the same question binds "does not set a numeric Privilege Leave (PTO) entitlement" in v2 and sets `legacy_conflict`. A model that refuses 15 days cannot fail the retrieval fixture. The separate question against v2 stays in the retrieval set. Which of the two a generated answer should have used is handled by the generation leak guard and the next diagnosis step.
 
 Offline tests boost a fake pair scorer and use `tmp_path`. The live MiniLM + cross-encoder run is `@pytest.mark.integration`.
+
+## 4.4 Grounded answer generation (done)
+
+`generate_answer` returns a `GeneratedAnswer` from the reranked `RETRIEVE_K` window. It does not re-retrieve and does not filter `status=legacy` out of the index. The model writes prose; Python decides what is allowed to ship and builds the citations.
+
+| Piece | Decision | Why |
+|-------|----------|-----|
+| Client | Official `openai` SDK, optional extra `llm` | Unit tests stub `TextGenerator` and never import the SDK, so CI can run without it. |
+| Credentials | `OPENAI_API_KEY` and `RAG_LAB_LLM_MODEL` | Neither the key nor the model tag is hard-coded. Example model is `gpt-4o-mini`. |
+| Temperature | `0` | Keeps the grounded JSON contract stable. |
+| Prompt | Only the `search()` window, each chunk tagged with doc name, section, version, and status | The model cannot cite a passage that retrieval did not return. |
+| Citations | Built in code from chunk metadata | Section strings stay as stored (`3. Fair Wages…`, `5. Fair Wages…`). Number prefixes are stripped only to detect that those two headings are the same policy section. |
+| Abstain | `I cannot answer from the retrieved policies.` | Empty windows, `grounded: false`, and answers that state a fact absent from current chunks. |
+
+Call flow:
+
+1. An empty question raises `GenerationError`. Empty hits, and hits that `screen_hits` drops, abstain without a model call. See 4.5.
+2. Group hits by `(doc_name, section without a leading number)`. A group with both `current` and `legacy` is a conflict.
+3. If every hit is `legacy`, abstain without calling the model. Cite the legacy line as `(legacy conflict)`. Do not state the planted 15-day entitlement.
+4. Otherwise prompt only the reranked chunks. The model returns `{"grounded": bool, "answer": "..."}`. Bad JSON raises `GenerationError`.
+5. If the answer contains `15 days` and no current chunk does, and the window is the Privilege Leave conflict, publish `The current Human Rights Policy does not specify a numeric PTO allowance.` Any other unsupported token is an abstention.
+6. `render_answer` prints prose and Sources. Current lines have no status suffix. Legacy lines in a conflict group (or a legacy-only window) get ` (legacy conflict)`.
+
+Missing `OPENAI_API_KEY` or `RAG_LAB_LLM_MODEL` raises `GenerationError` before any HTTP call. The SDK is imported only inside `generator_from_env`.
+
+`python -m rag_lab answer "…"` retrieves then generates. `query` stays extractive. `eval` prints `recall_at_k` and `extractive_answer_accuracy`, then `generated_key_fact`, `citation_complete`, `groundedness`, and `conflict_handling`. Those scores read `GeneratedAnswer.text` and `render_answer`; generation logic stays in `generate.py`.
+
+## 4.5 Retrieval safety (generation only)
+
+`screen_hits` in `safety.py` runs inside `generate_answer`. It does not run in `PolicyIndex.upsert` or in `search()`. Human Rights v1 stays stored and stays in the extractive window so diagnosis and eval can still retrieve it.
+
+| Piece | Decision | Why |
+|-------|----------|-----|
+| Floor | `MIN_RERANK_SCORE = 0.0` | Captured MS MARCO logits: a Wi-Fi question sits near −11; Privilege Leave clauses sit about +2 to +6. Zero drops the negative tail and keeps those clauses. The number lives in `config.py`. |
+| Empty after the floor | Abstain, no model call | "What is the Wi-Fi password?" is out of domain. A Data Privacy hit at −11.2 must not become an answer. |
+| Conflict | Same `doc_name` with both `current` and `legacy` | The prompt lists current passages first and labels legacy passages `LEGACY`. The retired text stays visible and is not treated as current policy. |
+| One-token query | Token must appear in the chunk | `SHORT_QUERY_MAX_TOKENS = 2`. "PTO" does not match supplier "parental leave" prose. A longer question skips this gate. |
 
 ## 5. End-to-end pipeline
 
@@ -210,6 +259,7 @@ flowchart TD
   bm25["BM25 sparse"]
   rrf["Reciprocal Rank Fusion"]
   rerank["ms-marco-MiniLM-L-6-v2"]
+  safety["score floor + current first"]
   gen["LLM + citations"]
   eval["Recall@K + accuracy"]
 
@@ -218,7 +268,8 @@ flowchart TD
   chroma --> bm25
   dense --> rrf
   bm25 --> rrf
-  rrf --> rerank --> eval --> gen
+  rrf --> rerank --> eval
+  rerank --> safety --> gen
 ```
 
 | Phase | Capability | Status |
@@ -229,7 +280,7 @@ flowchart TD
 | 4 | Cross-encoder rerank (`cross-encoder/ms-marco-MiniLM-L-6-v2`) | Done |
 | 5 | 8+ queries, Recall@K, accuracy | Done |
 | 6 | Two-question debug of stale policy | Next |
-| 7 | Cite doc / section / version | Metadata already on chunks |
+| 7 | Generate + cite doc / section / version | Done (`generate.py` + `answer` CLI) |
 | 8 | GitHub Actions | Last |
 
 ## 6. Stale-policy fixture (do not drop at ingest)
@@ -242,10 +293,10 @@ Query: *How many Privilege Leave / PTO days do I get?*
 
 **Index both versions.** Filtering `status=legacy` hides the data-quality incident the eval harness must surface.
 
-Two-question debug (later):
+Two-question debug (next capability):
 
 1. Did we retrieve the right documents? (v1 ranking is a corpus/index issue, not a model issue.)
-2. Did the generator use the right one? (Answering 15 days means it trusted a retired policy.)
+2. Did the generator use the right one? (Answering 15 days means it trusted a retired policy — the leak guard already blocks publishing that number; diagnosis explains the incident.)
 
 ## 7. Modules
 
@@ -261,9 +312,11 @@ src/rag_lab/
   bm25.py          # Okapi BM25 (done)
   hybrid.py        # Reciprocal Rank Fusion (done)
   rerank.py        # MS MARCO MiniLM cross-encoder (done)
-  eval.py          # Recall@K and extractive answer accuracy (done)
-  cli.py           # `python -m rag_lab query|eval` (inspection entrypoint)
-  config.py        # CHUNK_SIZE, RRF_K, RERANK_CANDIDATE_K, EVAL_K
+  safety.py        # score floor, short-query token, current-before-legacy (done)
+  eval.py          # Recall@K, extractive accuracy, generated-answer metrics (done)
+  generate.py      # GeneratedAnswer from the screened window + citations (done)
+  cli.py           # `python -m rag_lab query|answer|eval`
+  config.py        # CHUNK_SIZE, RRF_K, MIN_RERANK_SCORE, EVAL_K, LLM_*
 tests/
   test_corpus.py         # 500–800 primary band, roles, v1 fixture
   test_chunking.py
@@ -271,10 +324,12 @@ tests/
   test_hybrid.py         # dense + BM25 + RRF
   test_rerank.py         # cross-encoder reorder of the fused pool
   test_eval.py           # Recall@K and answer accuracy
+  test_generate.py       # fake-generator leak guard + Sources
+  test_safety.py         # score floor, legacy conflict order, short PTO query
   test_cli.py            # query and eval command output
 ```
 
-The CLI prints the pipeline that is already here. It does not add a generator. Do not add the 2-question debugger or CI in the CLI change.
+`query` and `eval` stay extractive. `answer` is the generation entrypoint. Do not add the 2-question debugger or CI in this change.
 
 ## 8. Evidence to capture
 
@@ -285,3 +340,5 @@ The CLI prints the pipeline that is already here. It does not add a generator. D
 5. `pytest -v tests/test_rerank.py` — fake-scorer reorder of the fused pool, and a PTO query that still returns Human Rights v1 after the cross-encoder.
 6. `pytest -v tests/test_eval.py -m "not integration"` — Recall@K and answer accuracy as separate checks. The PTO row records Human Rights v1 as the data-quality fixture.
 7. `pytest -v tests/test_cli.py` — `query` prints chunks and a cited answer; `eval` prints the two scores.
+8. `pytest -v tests/test_generate.py -m "not integration"` — PTO conflict citations, POSH email, abstention, legacy-only window, env failures.
+9. `pytest -v tests/test_safety.py tests/test_minimal_loop.py::test_upsert_keeps_legacy_human_rights_metadata` — Wi-Fi abstains, current Human Rights leads the prompt, and upsert still stores `status=legacy`.

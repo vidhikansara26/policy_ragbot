@@ -220,6 +220,11 @@ class RerankingRetriever:
         self._candidate_k = candidate_k
 
     @property
+    def hybrid(self) -> HybridRetriever:
+        """Fused dense + BM25 retriever, before the cross-encoder reorder."""
+        return self._hybrid
+
+    @property
     def scorer(self) -> PairScorer:
         """Pair scorer used to reorder fused hits."""
         return self._scorer

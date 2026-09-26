@@ -68,9 +68,13 @@ python -m rag_lab answer "How many Privilege Leave / PTO days do I get?"
 The eval scoreboard prints `recall_at_k` and `extractive_answer_accuracy`, then `generated_key_fact`, `citation_complete`, `groundedness`, and `conflict_handling`. The Privilege Leave retrieval row still records Human Rights Policy v1 as the data-quality fixture. Extractive accuracy on that row means the rank-1 chunk is v1. Key-fact accuracy on the same question means the published answer used the current wording and cited v2 while flagging v1. `eval` calls the configured LLM unless `--retrieval-only` is set. `--output` writes the same numbers as JSON for CI:
 
 ```bash
-python -m rag_lab eval --output eval/record-full.json
+python -m rag_lab eval --output eval/record.json
 python -m rag_lab eval --retrieval-only --output eval/record-retrieval.json
 ```
+
+`eval/record.json` is the committed snapshot of a full harness run (`qwen3:8b`).
+CI checks that file; it does not re-call the language model. Fresh machine
+records stay gitignored (`eval/record-retrieval.json`).
 
 Print dense-only and reciprocal-rank-fusion hits on the same rows. The cross-encoder is not called. `All.HR@coforge.com` is the MiniLM miss in this corpus: dense leaves Human Rights Policy v2, section 13. Grievance Redressal, outside the top 5 (dense rank 8), BM25 ranks that chunk 1, and RRF places it in the fused top 5.
 

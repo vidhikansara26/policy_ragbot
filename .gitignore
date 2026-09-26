@@ -26,8 +26,7 @@ chroma/
 data/processed/
 .cache/
 eval/*.json
-
-# OS / IDE
+!eval/record.json
 
 # OS / IDE
 .DS_Store

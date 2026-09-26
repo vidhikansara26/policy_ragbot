@@ -2,8 +2,9 @@
 
 Status: Corpus, hierarchical chunking, the dense retrieve loop (MiniLM +
 Chroma cosine), hybrid search (BM25 + Reciprocal Rank Fusion), cross-encoder
-reranking, the evaluation harness, and grounded LLM answer generation are in
-production code. Incident diagnosis stays blocked until the next capability.
+reranking, the evaluation harness, grounded LLM answer generation, and the
+two-question incident diagnosis are in production code. CI is the next
+capability.
 
 Enterprise policy assistant over **versioned Coforge investor policies**, with a
 **known data-quality fixture** (stale Human Rights v1) so retrieval can surface
@@ -21,17 +22,18 @@ data/raw/*.md
     → eval harness           # Recall@K and answer accuracy, K = 5
     → safety screen          # drop score < 0; current before legacy (generation only)
     → generate + cite        # grounded JSON answer + code-built Sources
-    → 2-question diagnosis   # next capability
-    → GitHub Actions CI
+    → 2-question diagnosis   # docs/data-quality-diagnosis.md
+    → GitHub Actions CI      # next capability
 ```
 
 **Gate:** `tests/test_minimal_loop.py`, `tests/test_hybrid.py`, `tests/test_rerank.py`,
 and `tests/test_eval.py` are green. Generation unit tests live in
-`tests/test_generate.py`. Incident diagnosis is the next capability.
+`tests/test_generate.py`. The diagnosis rows live in
+`tests/test_data_quality_diagnosis.py`. CI is the next capability.
 
 ## 1. Pipeline slice
 
-The block above is the production path. Later phases add incident diagnosis, generation with citations, and CI.
+The block above is the production path. The remaining phase is CI.
 
 ## 2. Corpus facts (measured, not assumed)
 
@@ -282,7 +284,7 @@ flowchart TD
 | 3 | Hybrid dense + BM25, RRF | Done |
 | 4 | Cross-encoder rerank (`cross-encoder/ms-marco-MiniLM-L-6-v2`) | Done |
 | 5 | 8+ queries, Recall@K, accuracy | Done |
-| 6 | Two-question debug of stale policy | Next |
+| 6 | Two-question debug of stale policy | Done (`docs/data-quality-diagnosis.md`) |
 | 7 | Generate + cite doc / section / version | Done (`generate.py` + `answer` CLI) |
 | 8 | GitHub Actions | Last |
 
@@ -296,17 +298,18 @@ Query: *How many Privilege Leave / PTO days do I get?*
 
 **Index both versions.** Filtering `status=legacy` hides the data-quality incident the eval harness must surface.
 
-Two-question debug (next capability):
+Two-question debug — full write-up in [docs/data-quality-diagnosis.md](data-quality-diagnosis.md):
 
-1. Did we retrieve the right documents? (v1 ranking is a corpus/index issue, not a model issue.)
-2. Did the generator use the right one? (Answering 15 days means it trusted a retired policy — the leak guard already blocks publishing that number; diagnosis explains the incident.)
+1. Did we retrieve the right documents? **Yes.** v1 lands at rank 1 and v2 at rank 3 of the same top-5 window, so this is a corpus issue, not a model issue.
+2. Did the generator use the right one? **No.** The extractive path cites rank 1, which is the retired clause. The leak guard blocks publishing 15 days from the generated path.
 
 ## 7. Modules
 
 ```
 docs/
-  architecture.md  locked ingest/chunk/index design
-  corpus.md        source PDFs, roles, 500–800 word band
+  architecture.md             locked ingest/chunk/index design
+  corpus.md                   source PDFs, roles, 500–800 word band
+  data-quality-diagnosis.md   two-question debug of the stale v1 PTO clause
 src/rag_lab/
   corpus.py        # exists
   chunking.py      # static recursive hierarchical types (done)
@@ -330,9 +333,10 @@ tests/
   test_generate.py       # fake-generator leak guard + Sources
   test_safety.py         # score floor, legacy conflict order, short PTO query
   test_cli.py            # query and eval command output
+  test_data_quality_diagnosis.py  # two-question verdicts, leak guard, open gap
 ```
 
-`query` and `eval` stay extractive. `answer` is the generation entrypoint. Do not add the 2-question debugger or CI in this change.
+`query` and `eval` stay extractive. `answer` is the generation entrypoint. CI is the remaining capability.
 
 ## 8. Evidence to capture
 

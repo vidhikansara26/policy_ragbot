@@ -16,7 +16,7 @@ not change extractive `query` or eval scoring.
 | 3 | Hybrid search (dense + BM25) with Reciprocal Rank Fusion | Done |
 | 4 | Cross-encoder reranking (`ms-marco-MiniLM-L-6-v2`) | Done |
 | 5 | Eval harness: 8+ queries, Recall@K, answer accuracy | Done |
-| 6 | Data-quality diagnosis (2-Question Debugging Framework) | Next |
+| 6 | Data-quality diagnosis (2-Question Debugging Framework) | Done |
 | 7 | Grounded generation + source attribution (doc, section, version) | Done |
 | 8 | GitHub Actions CI | Pending |
 
@@ -71,6 +71,7 @@ The first run loads the embedding and rerank models and writes `chroma/`. Offlin
 ```
 docs/architecture.md   locked ingest/chunk/index design
 docs/corpus.md         source PDFs, roles, 500–800 word band
+docs/data-quality-diagnosis.md  two-question debug of the stale v1 PTO clause
 src/rag_lab/           platform package (one module per capability)
 tests/                 pytest; test_minimal_loop.py gates hybrid search
 data/raw/              Coforge policies (includes stale Human Rights v1)
@@ -79,3 +80,4 @@ chroma/                vector store (gitignored, rebuildable)
 
 Design reference: [docs/architecture.md](docs/architecture.md).
 Corpus inventory: [docs/corpus.md](docs/corpus.md).
+Incident diagnosis: [docs/data-quality-diagnosis.md](docs/data-quality-diagnosis.md).

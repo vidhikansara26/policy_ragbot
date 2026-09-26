@@ -3,6 +3,7 @@ doc_name: "Human Rights Policy"
 section: "Fair Wages and Remuneration"
 version: "2.0"
 status: "current"
+role: "primary"
 company: "Coforge Limited"
 source_url: "https://investors.coforge.com/hubfs/Coforge-Human-Rights-Policy.pdf"
 effective_date: "2025-03-20"
@@ -15,9 +16,9 @@ Source: [Coforge Human Rights Policy](https://investors.coforge.com/hubfs/Coforg
 
 ## 1. Introduction
 
-Coforge Limited (hereafter referred to as "Coforge") is a leading provider of information technology solutions, servicing customers across the globe while following global standards in the software development process. The company is committed to upholding the human rights of all stakeholders that are involved in and impacted by our business operations and across the value chain, to whatever extent possible. Coforge aims to uphold these human rights in accordance with the United Nations Guiding Principles on Business and Human Rights, the International Labor Organization's Declaration on Fundamental Principles and Rights at Work, as well as national and local laws applicable to the geographies within which it operates.
+Coforge Limited (hereafter referred to as "Coforge") is committed to upholding the human rights of all stakeholders involved in and impacted by its business operations and value chain. Coforge aims to uphold these rights in accordance with the United Nations Guiding Principles on Business and Human Rights, the International Labor Organization's Declaration on Fundamental Principles and Rights at Work, and national and local laws in the geographies where it operates.
 
-Coforge seeks to identify, prevent, mitigate, and account for adverse human rights impacts and adequately address any adverse impacts and violations through the grievance redressal mechanism.
+Coforge seeks to identify, prevent, mitigate, and account for adverse human rights impacts and address violations through the grievance redressal mechanism.
 
 ## 2. Scope
 
@@ -25,13 +26,11 @@ This policy is applicable to all group companies and their employees, contractua
 
 ## 3. Coforge's Commitments
 
-Coforge is committed to upholding the human rights of our stakeholders and strives to protect all human rights that have been defined in this section and prevent any adverse impacts on them. This policy also represents commitment from Coforge towards alignment and review of this document on an annual basis or as may be required to ensure compliance and adoption of best practices.
+Coforge is committed to upholding the human rights of our stakeholders and strives to protect the rights defined in this policy. This document is reviewed on an annual basis, or as required, to ensure compliance and adoption of best practices.
 
 ## 4. Equal Opportunity Employer
 
-At Coforge, we are committed to promoting Diversity, Equity, and Inclusion (DE&I) in all business operations. The Company is an equal opportunity employer, determined to uphold diversity and inclusivity in recruiting, hiring, training, and development. Fair compensation is provided based on qualifications, performance, and skill development.
-
-Coforge does not discriminate based on race, religion, age, sex, color, nationality or social origin, ethnicity, disability, sexual orientation, political opinion, or any other status that is protected by law. Please refer to our Diversity Equity & Inclusion Policy for more information about our commitment to diversity in our workforce.
+The Company is an equal opportunity employer. Fair compensation is provided based on qualifications, performance, and skill development. Coforge does not discriminate based on race, religion, age, sex, color, nationality or social origin, ethnicity, disability, sexual orientation, political opinion, or any other status protected by law.
 
 ## 5. Fair Wages and Remuneration
 
@@ -41,15 +40,11 @@ This current policy does not set a numeric Privilege Leave (PTO) entitlement. Le
 
 ## 6. Harassment-Free Workplace
 
-Coforge's Policies such as our Policy Against Sexual Harassment (POSH) in the Workplace and Code of Conduct highlight our commitment to a work environment free of harassment and the appropriate procedure to address any violations of the same. Our Diversity Equity & Inclusion Policy and Disciplinary Action Policy aim to foster a work environment free of harassment and discrimination, and provide a mechanism to escalate concerns.
-
-The company is committed to provide a harassment-free work environment to cultivate a conducive and growth-oriented mind-set. To dissuade any unethical practice/non-compliance we also have a grievance redressal mechanism in place which enable an individual to approach the company to raise the concern anonymously.
+Coforge's Policy Against Sexual Harassment (POSH) and Code of Conduct set the procedure for a work environment free of harassment. A grievance redressal mechanism enables an individual to raise a concern anonymously.
 
 ## 7. Healthy and Safe Environment
 
-Coforge aims to provide a healthy and safe working environment. A comprehensive Environment, Health and Safety Management System Manual has been formulated in accordance with the requirements of ISO 14001:2015 and ISO 45001:2018 standards and the management system framework ensures that all stated and expected requirements of all the interested parties are understood.
-
-The EHS Management System Manual defines the company's commitment to identifying and mitigating risk of accidents and injury, compliance obligations, and ensuring proper action in case of accidents, injury, or occupational hazards in a timely and effective manner.
+A comprehensive Environment, Health and Safety Management System Manual has been formulated in accordance with ISO 14001:2015 and ISO 45001:2018. It defines the process for identifying and mitigating accidents, injury, and occupational hazards.
 
 ## 8. Force or Compulsory or Involuntary Labor
 
@@ -61,15 +56,15 @@ Coforge strongly prohibits child labor in our business operations and across the
 
 ## 10. Freedom of Association and Collective Bargaining
 
-Coforge respects the right of employees to practice their legitimate right of free association. Coforge cooperates in good faith with the bodies that its employees collectively choose to represent within the appropriate legal frameworks.
+Coforge respects the right of employees to practice their legitimate right of free association and cooperates in good faith with the bodies that employees collectively choose to represent within the appropriate legal frameworks.
 
 ## 11. Data Privacy
 
-Coforge is committed to protect the data privacy of employees (including ex-employees and retirees), customers and suppliers. Coforge has firmed up a detailed Privacy statement detailing out the mandates to be followed and has established a dedicated Data Protection Office to handle such data.
+Coforge is committed to protect the data privacy of employees (including ex-employees and retirees), customers and suppliers, and has established a dedicated Data Protection Office.
 
 ## 12. Community Engagement
 
-Coforge recognizes that our business affects communities present in the vicinity of our operations. We aim to ensure that the human rights of community members are protected along with our commitments to stakeholders defined in the section above. We engage in various community-led projects in line with our CSR Policy.
+Coforge recognizes that our business affects communities present in the vicinity of our operations. We engage in various community-led projects in line with our CSR Policy.
 
 ## 13. Grievance Redressal
 

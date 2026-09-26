@@ -29,5 +29,18 @@ jobs:
       - run: ruff check .
       - run: mypy src
       - run: pytest -m "not integration and not llm"
-      - name: Confirm the committed eval snapshot
-        run: python -m json.tool eval/record.json > /dev/null
+
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev]"
+      - name: Scoreboard from eval/record.json
+        run: python scripts/print_eval_record.py
+      - name: Harness tests against the snapshot
+        run: pytest tests/test_eval.py tests/test_eval_record.py -m "not integration and not llm"

@@ -107,7 +107,23 @@ RERANK_CANDIDATE_K: int = 20
 # MS MARCO logits. Captured window: Wi-Fi / out-of-domain sits near -11;
 # Privilege Leave clauses sit about +2 to +6. 0.0 drops the negative
 # tail and keeps those clauses. Compared in safety.py, not in search().
+# The current Privilege Leave counterpart scores about -1.023 and stays
+# under this floor on purpose; safety.py re-admits it only as the
+# conflict companion of the legacy hit that cleared 0.0.
 MIN_RERANK_SCORE: float = 0.0
+# A question no single clause answers ("what is the human rights policy
+# talking all about?") scores the right policy below 0 and far above
+# Wi-Fi. Captured top of that window: Human Rights preamble/scope about
+# -1.6 to -2.2, commitments and the supplier human-rights clause about
+# -4.1 to -4.4, then a gap (legacy version note -4.8, Modern Slavery
+# -5.9, Wi-Fi -10.9). When the best hit is still at or above
+# TOPIC_RERANK_SCORE, safety.py keeps hits within TOPIC_RERANK_MARGIN
+# of that best score. A best score below TOPIC_RERANK_SCORE abstains,
+# and the companion rule does not run. Factoid questions whose best hit
+# clears MIN_RERANK_SCORE do not use this band, so a -1.2 sibling of a
+# +6 clause stays out.
+TOPIC_RERANK_SCORE: float = -3.0
+TOPIC_RERANK_MARGIN: float = 3.0
 # A query with fewer than this many alphanumeric tokens must contain
 # that token in the chunk. "PTO" is one token; supplier "leave" is not.
 SHORT_QUERY_MAX_TOKENS: int = 2
@@ -149,3 +165,13 @@ LLM_LOCAL_API_KEY: str = "local"
 # Temperature 0 keeps the grounded JSON contract stable.
 LLM_TEMPERATURE: float = 0.0
 LLM_TIMEOUT_SECONDS: float = 120.0
+# Qwen3 on Ollama writes a long private draft before the short JSON answer.
+# The demo waits for the whole reply, so that draft is the delay, and it does
+# not make the policy answer more grounded. Local servers honor think=false.
+# Hosted OpenAI has no such switch, so the field is sent only with a base URL.
+LLM_THINK: bool = False
+
+# Local demo UI. Bind the loopback interface so the scoreboard and the
+# policy index are not exposed on the network by default.
+DEMO_HOST: str = "127.0.0.1"
+DEMO_PORT: int = 8765

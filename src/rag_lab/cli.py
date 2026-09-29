@@ -25,6 +25,9 @@ can upload a record. K is ``EVAL_K``. The Privilege Leave retrieval row
 is labeled ``data_quality_fixture`` when Human Rights Policy v1 is in the
 window. Extractive accuracy on that row still means the rank-1 chunk is v1.
 
+``demo`` serves the local policy UI on ``DEMO_HOST`` and ``DEMO_PORT``. It
+uses this same index. ``status=legacy`` is not filtered.
+
 Model ids, K, and the Chroma directory stay in ``rag_lab.config``.
 """
 
@@ -38,7 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from rag_lab.chunking import chunk_corpus
-from rag_lab.config import CHROMA_DIR, EVAL_K, RETRIEVE_K
+from rag_lab.config import CHROMA_DIR, DEMO_HOST, DEMO_PORT, EVAL_K, RETRIEVE_K
 from rag_lab.corpus import Document, load_corpus
 from rag_lab.embeddings import TextEmbedder
 from rag_lab.eval import (
@@ -271,13 +274,14 @@ def main(
     opener: Callable[[], Pipeline] | None = None,
     generator_factory: Callable[[], TextGenerator] | None = None,
 ) -> int:
-    """Run ``query``, ``compare``, ``answer``, or ``eval``. Return a process status code.
+    """Run ``query``, ``compare``, ``answer``, ``eval``, or ``demo``. Return a process status code.
 
     ``opener`` defaults to :func:`open_default_pipeline`. Tests pass a
     pipeline built on a temporary Chroma directory and a fake scorer.
-    ``generator_factory`` defaults to :func:`generator_from_env`. ``answer``
-    and ``eval`` both use it. ``query`` and ``compare`` do not. ``compare``
-    prints dense and RRF rows and does not call the cross-encoder.
+    ``generator_factory`` defaults to :func:`generator_from_env`. ``answer``,
+    ``eval``, and ``demo`` use it. ``query`` and ``compare`` do not.
+    ``compare`` prints dense and RRF rows and does not call the cross-encoder.
+    ``demo`` serves until interrupted and does not filter ``status=legacy``.
 
     Raises:
         Nothing. Pipeline failures are printed to stderr and returned as 1.
@@ -336,6 +340,19 @@ def main(
             if output_path is not None:
                 write_eval_record(Path(output_path), extractive, generated)
             text = render_eval(extractive, generated)
+        elif command == "demo":
+            from rag_lab.demo import serve_demo
+
+            try:
+                serve_demo(
+                    pipeline,
+                    host=str(args.host),
+                    port=int(args.port),
+                    generator_factory=generator_factory,
+                )
+            except KeyboardInterrupt:
+                sys.stdout.write("\n")
+            return 0
         else:
             sys.stderr.write(f"error: unknown command {command}\n")
             return 2
@@ -354,7 +371,8 @@ def _parser() -> argparse.ArgumentParser:
         prog="python -m rag_lab",
         description=(
             "Retrieve policy passages, compare dense and RRF ranks, generate "
-            "a grounded answer, or print Recall@K and answer accuracy."
+            "a grounded answer, print Recall@K and answer accuracy, or serve "
+            "the local demo UI."
         ),
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -408,6 +426,21 @@ def _parser() -> argparse.ArgumentParser:
         "--retrieval-only",
         action="store_true",
         help="Skip generated-answer scoring; no language model is called",
+    )
+    demo = sub.add_parser(
+        "demo",
+        help="Serve the local policy demo UI",
+    )
+    demo.add_argument(
+        "--host",
+        default=DEMO_HOST,
+        help=f"Interface to bind (default: {DEMO_HOST})",
+    )
+    demo.add_argument(
+        "--port",
+        type=int,
+        default=DEMO_PORT,
+        help=f"Port to bind (default: {DEMO_PORT})",
     )
     return parser
 

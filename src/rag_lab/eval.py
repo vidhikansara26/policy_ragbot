@@ -55,7 +55,13 @@ from rag_lab.chunking import Chunk, chunk_document
 from rag_lab.config import EVAL_K, LEGACY_PTO_DAYS
 from rag_lab.corpus import Document
 from rag_lab.exceptions import EvalError
-from rag_lab.generate import ABSTAIN_TEXT, TextGenerator, generate_answer, render_answer
+from rag_lab.generate import (
+    ABSTAIN_TEXT,
+    GeneratedAnswer,
+    TextGenerator,
+    generate_answer,
+    render_answer,
+)
 from rag_lab.rerank import RerankedHit
 from rag_lab.safety import screen_hits
 
@@ -696,13 +702,30 @@ def _require_same_citation(chunks: Sequence[Chunk], *, query_id: str, source_fil
 
 def _score_one(retriever: Searcher, gold: GoldPassage, *, k: int) -> QueryEval:
     hits = list(retriever.search(gold.question, k=k))[:k]
-    if not hits:
+    return score_retrieved_window(gold, hits, k=k)
+
+
+def score_retrieved_window(
+    gold: GoldPassage,
+    hits: Sequence[RerankedHit],
+    *,
+    k: int,
+) -> QueryEval:
+    """Score Recall@K and rank-1 accuracy for a window ``search`` already returned.
+
+    Raises:
+        EvalError: If ``k`` is invalid, or ``hits`` is empty.
+    """
+    if k <= 0:
+        raise EvalError(f"Invalid k={k}")
+    window = list(hits)[:k]
+    if not window:
         raise EvalError(
             f"Query {gold.query_id!r} returned no passages; cannot cite "
             "doc name, section, and version"
         )
-    retrieved = tuple(_retrieved(hit, gold, rank=rank) for rank, hit in enumerate(hits, start=1))
-    answer = _answer(hits[0])
+    retrieved = tuple(_retrieved(hit, gold, rank=rank) for rank, hit in enumerate(window, start=1))
+    answer = _answer(window[0])
     recall_hit = any(_is_gold(row, gold) for row in retrieved)
     answer_correct = _answer_matches(answer, gold)
     label = _label(gold, recall_hit=recall_hit)
@@ -717,6 +740,33 @@ def _score_one(retriever: Searcher, gold: GoldPassage, *, k: int) -> QueryEval:
         retrieved=retrieved,
         retrieval_label=label,
         note=_note(gold, answer, label=label, k=k),
+    )
+
+
+def score_generated_answer(
+    gold: AnswerGold,
+    hits: Sequence[RerankedHit],
+    answer: GeneratedAnswer,
+    *,
+    k: int,
+) -> AnswerQueryEval:
+    """Score one published answer with the same checks as :func:`evaluate_answers`.
+
+    Raises:
+        EvalError: If ``k`` is invalid, or the published text has no Sources block.
+    """
+    if k <= 0:
+        raise EvalError(f"Invalid k={k}")
+    published = render_answer(answer)
+    prose, sources = _split_published(published, query_id=gold.query_id)
+    return _score_answer(
+        gold,
+        hits,
+        published=published,
+        prose=prose,
+        sources=sources,
+        abstained=answer.abstained,
+        k=k,
     )
 
 

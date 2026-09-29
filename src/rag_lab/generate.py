@@ -19,7 +19,7 @@ import json
 import logging
 import os
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -30,6 +30,7 @@ from rag_lab.config import (
     LLM_LOCAL_API_KEY,
     LLM_MODEL_ENV,
     LLM_TEMPERATURE,
+    LLM_THINK,
     LLM_TIMEOUT_SECONDS,
 )
 from rag_lab.exceptions import GenerationError
@@ -130,8 +131,11 @@ class OpenAIChatGenerator:
         model: str,
         temperature: float = LLM_TEMPERATURE,
         timeout_seconds: float = LLM_TIMEOUT_SECONDS,
+        extra_body: Mapping[str, Any] | None = None,
     ) -> None:
         """Bind a client and model. No network call until ``complete``.
+
+        ``extra_body`` is for a local server, such as Ollama ``think: false``.
 
         Raises:
             GenerationError: If ``model`` is blank or ``timeout_seconds`` is invalid.
@@ -144,6 +148,7 @@ class OpenAIChatGenerator:
         self._model = model.strip()
         self._temperature = temperature
         self._timeout_seconds = timeout_seconds
+        self._extra_body = None if extra_body is None else dict(extra_body)
 
     def complete(self, prompt: str) -> str:
         """POST a chat completion and return the assistant message text.
@@ -154,13 +159,16 @@ class OpenAIChatGenerator:
         """
         if not prompt.strip():
             raise GenerationError("Generation prompt is empty")
+        kwargs: dict[str, Any] = {
+            "model": self._model,
+            "temperature": self._temperature,
+            "timeout": self._timeout_seconds,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if self._extra_body:
+            kwargs["extra_body"] = self._extra_body
         try:
-            response = self._client.chat.completions.create(
-                model=self._model,
-                temperature=self._temperature,
-                timeout=self._timeout_seconds,
-                messages=[{"role": "user", "content": prompt}],
-            )
+            response = self._client.chat.completions.create(**kwargs)
         except Exception as exc:
             raise GenerationError(f"LLM request failed: {exc}") from exc
         return _message_content(response)
@@ -206,7 +214,11 @@ def generator_from_env() -> TextGenerator:
         if base_url
         else OpenAI(api_key=key, timeout=LLM_TIMEOUT_SECONDS)
     )
-    return OpenAIChatGenerator(client, model=model)
+    return OpenAIChatGenerator(
+        client,
+        model=model,
+        extra_body=local_llm_extra_body(base_url),
+    )
 
 
 def generate_answer(
@@ -404,6 +416,7 @@ def _build_prompt(question: str, cited: Sequence[_CitedHit]) -> str:
         "Answer in complete sentences and keep every condition the passage attaches "
         "to the rule, such as deadlines, thresholds, and exceptions.",
         'Respond with a single JSON object: {"grounded": <bool>, "answer": "<string>"}.',
+        "Do not write a reasoning draft. The answer field is one or two short sentences.",
         "grounded describes your answer, not the question. Set it to true whenever a "
         "current passage supports what you wrote. Reporting that current policy sets "
         "no such figure is itself a grounded answer when a current passage says so.",
@@ -587,6 +600,17 @@ def _contains_legacy_only_sentence(
         if piece in legacy_text and piece not in current_text:
             return True
     return False
+
+
+def local_llm_extra_body(base_url: str) -> dict[str, Any] | None:
+    """Return Ollama options for a local server, or ``None`` for hosted OpenAI.
+
+    ``think: false`` skips Qwen's private draft. A blank base URL means the
+    hosted endpoint, which does not accept that field.
+    """
+    if not base_url.strip() or LLM_THINK:
+        return None
+    return {"think": False}
 
 
 def _message_content(response: Any) -> str:

@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Policy assistant</title>
+  <style>
+    :root {
+      --paper: #f3efe6;
+      --ink: #1c1915;
+      --muted: #5e584e;
+      --line: #ddd4c4;
+      --card: #fffcf7;
+      --slate: #1e3a46;
+      --current: #1d6b45;
+      --current-bg: #e5f3eb;
+      --legacy: #8a5a12;
+      --legacy-bg: #f8efd8;
+      --miss: #7c2d2d;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      display: flex;
+      flex-direction: column;
+      background: var(--paper);
+      color: var(--ink);
+      font: 15px/1.5 "Segoe UI", "Helvetica Neue", sans-serif;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 22px;
+      border-bottom: 1px solid var(--line);
+      background: var(--paper);
+    }
+    .brand h1 {
+      margin: 0;
+      font-family: Palatino, "Iowan Old Style", Georgia, serif;
+      font-size: 22px;
+      font-weight: 600;
+      letter-spacing: -0.03em;
+      white-space: nowrap;
+    }
+    .eyebrow {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+    nav { display: flex; gap: 8px; }
+    button, textarea { font: inherit; }
+    nav button, .chip, .ghost, .composer button {
+      cursor: pointer;
+    }
+    nav button {
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 999px;
+      padding: 8px 14px;
+      color: var(--muted);
+    }
+    nav button[aria-selected="true"] { background: var(--slate); color: #f6f3ec; }
+    .llm { font-size: 13px; color: var(--muted); text-align: right; }
+    .llm strong { color: var(--ink); font-weight: 600; }
+    .chat, .panel { flex: 1; min-height: 0; }
+    .chat {
+      width: min(860px, 100%);
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      padding: 0 16px 14px;
+    }
+    #thread { flex: 1; min-height: 0; overflow: auto; padding: 18px 4px 12px; }
+    .welcome { color: var(--muted); max-width: 46em; }
+    .turn { margin: 0 0 16px; }
+    .user {
+      margin-left: auto;
+      max-width: min(70%, 520px);
+      background: var(--slate);
+      color: #f6f3ec;
+      border-radius: 16px 16px 4px 16px;
+      padding: 10px 14px;
+      white-space: pre-wrap;
+    }
+    .assistant {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 4px 16px 16px 16px;
+      padding: 12px 14px 14px;
+    }
+    .trace { list-style: none; margin: 0; padding: 0; }
+    .step {
+      border-left: 2px solid var(--line);
+      margin-left: 6px;
+      padding: 0 0 12px 12px;
+    }
+    .step.running { border-left-color: var(--slate); }
+    .step.done { border-left-color: var(--current); }
+    .step h3 { margin: 0; font-size: 14px; }
+    .step p { margin: 2px 0 0; color: var(--muted); }
+    .passages { margin: 8px 0 0; padding: 0; list-style: none; }
+    .passages details { margin: 0 0 6px; }
+    .passages summary { cursor: pointer; }
+    .passages p { white-space: pre-wrap; }
+    .reply { margin-top: 4px; padding-top: 10px; border-top: 1px solid var(--line); }
+    .reply h3 {
+      margin: 0 0 6px;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .reply .prose { margin: 0; white-space: pre-wrap; }
+    .sources { margin: 8px 0 0; padding-left: 18px; }
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 4px 0 8px;
+      background: var(--paper);
+    }
+    .chip, .ghost, .composer button {
+      border-radius: 999px;
+      padding: 8px 12px;
+    }
+    .chip {
+      background: var(--card);
+      border: 1px solid var(--line);
+      color: inherit;
+    }
+    .composer {
+      display: flex;
+      gap: 8px;
+      align-items: flex-end;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 8px;
+      margin-bottom: 2px;
+    }
+    .composer textarea {
+      flex: 1;
+      border: 0;
+      resize: none;
+      min-height: 44px;
+      max-height: 140px;
+      padding: 8px;
+      background: transparent;
+      color: inherit;
+    }
+    .composer button, .ghost {
+      background: var(--slate);
+      color: #f6f3ec;
+      border: 0;
+    }
+    .ghost { background: transparent; color: var(--slate); border: 1px solid var(--slate); }
+    .composer button:disabled, .chip:disabled { opacity: 0.55; cursor: default; }
+    .pill {
+      display: inline-flex;
+      border-radius: 999px;
+      padding: 1px 8px;
+      font-size: 12px;
+    }
+    .current { background: var(--current-bg); color: var(--current); }
+    .legacy { background: var(--legacy-bg); color: var(--legacy); }
+    .panel { overflow: auto; padding: 22px 28px 40px; }
+    .corpus { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+    .doc, .metric {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 14px;
+    }
+    .doc h3 { margin: 8px 0 4px; font-size: 16px; }
+    .meta { color: var(--muted); font-size: 12px; }
+    .metrics { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0; }
+    .metric b { display: block; font-size: 22px; font-family: Palatino, Georgia, serif; }
+    table { width: 100%; border-collapse: collapse; background: var(--card); }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; font-size: 13px; }
+    .hidden { display: none !important; }
+    .ask-row { display: flex; gap: 10px; margin-bottom: 12px; }
+    .panel h2 {
+      margin: 4px 0 8px;
+      font-family: Palatino, Georgia, serif;
+      font-size: 20px;
+      font-weight: 600;
+    }
+    #session { margin-bottom: 28px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <p class="eyebrow">Coforge policy assistant</p>
+      <h1>Policy assistant</h1>
+    </div>
+    <nav>
+      <button type="button" data-view="ask" aria-selected="true">Chat</button>
+      <button type="button" data-view="corpus" aria-selected="false">Corpus</button>
+      <button type="button" data-view="score" aria-selected="false">Scoreboard</button>
+    </nav>
+    <div class="llm" id="llm">Loading the index…</div>
+  </header>
+
+  <section id="view-ask" class="chat">
+    <div id="thread" aria-live="polite">
+      <p class="welcome">Ask a policy question. Each reply shows the search steps, then the answer and its sources.</p>
+    </div>
+    <div class="chips" id="prompts"></div>
+    <form class="composer" id="ask-form">
+      <textarea id="question" rows="1" placeholder="Ask about a Coforge policy"></textarea>
+      <button type="submit">Send</button>
+    </form>
+  </section>
+
+  <section id="view-corpus" class="panel hidden">
+    <div class="corpus" id="corpus"></div>
+  </section>
+
+  <section id="view-score" class="panel hidden">
+    <div id="session"></div>
+    <div class="ask-row">
+      <button type="button" class="ghost" id="load-captured">Show captured record</button>
+      <button type="button" class="ghost" id="run-live">Recompute retrieval</button>
+    </div>
+    <div id="score"></div>
+  </section>
+
+  <script>
+    let overview = null;
+    let busy = false;
+    let sessionTurns = [];
+
+    function escapeText(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
+    }
+
+    function pill(status) {
+      const kind = status === "legacy" ? "legacy" : "current";
+      return `<span class="pill ${kind}">${escapeText(status)}</span>`;
+    }
+
+    function scrollThread() {
+      const thread = document.querySelector("#thread");
+      thread.scrollTop = thread.scrollHeight;
+    }
+
+    function setBusy(value) {
+      busy = value;
+      document.querySelector("#ask-form button").disabled = value;
+      document.querySelectorAll(".chip").forEach((chip) => {
+        chip.disabled = value;
+      });
+    }
+
+    async function loadOverview() {
+      const response = await fetch("/api/overview");
+      if (!response.ok) throw new Error("Overview failed");
+      overview = await response.json();
+      const llm = overview.llm;
+      document.querySelector("#llm").innerHTML = llm.configured
+        ? `LLM <strong>${escapeText(llm.model)}</strong><br>${escapeText(llm.base_url)}`
+        : "LLM not configured<br>Retrieval still runs";
+      const promptRoot = document.querySelector("#prompts");
+      promptRoot.innerHTML = overview.prompts.map((prompt) =>
+        `<button type="button" class="chip">${escapeText(prompt.label)}</button>`
+      ).join("");
+      promptRoot.querySelectorAll(".chip").forEach((button, index) => {
+        button.dataset.question = overview.prompts[index].question;
+      });
+      document.querySelector("#corpus").innerHTML = overview.corpus.map((doc) =>
+        `<article class="doc">
+          ${pill(doc.status)} <span class="pill">${escapeText(doc.role)}</span>
+          <h3>${escapeText(doc.doc_name)}</h3>
+          <div class="meta">v${escapeText(doc.version)} · ${doc.words} words · ${doc.sections} sections · ${doc.chunks} chunks</div>
+          <div class="meta">${escapeText(doc.source_file)}</div>
+        </article>`
+      ).join("");
+    }
+
+    function passageList(hits) {
+      if (!hits || !hits.length) return "";
+      return `<ul class="passages">${hits.map((hit) => `
+        <li><details>
+          <summary>${hit.rank}. ${escapeText(hit.doc_name)} · v${escapeText(hit.version)} ${pill(hit.status)} · ${escapeText(hit.score_label || "")}</summary>
+          <div class="meta">${escapeText(hit.section)}</div>
+          <p>${escapeText(hit.text)}</p>
+        </details></li>`).join("")}</ul>`;
+    }
+
+    function startTurn(question) {
+      const welcome = document.querySelector(".welcome");
+      if (welcome) welcome.remove();
+      const turn = document.createElement("div");
+      turn.className = "turn";
+      turn.innerHTML = `<div class="user"></div><div class="assistant"><ol class="trace"></ol><div class="reply"></div></div>`;
+      turn.querySelector(".user").textContent = question;
+      document.querySelector("#thread").appendChild(turn);
+      scrollThread();
+      return turn;
+    }
+
+    function upsertStep(turn, event) {
+      const trace = turn.querySelector(".trace");
+      let step = trace.querySelector(`[data-stage="${event.id}"]`);
+      if (!step) {
+        step = document.createElement("li");
+        step.className = "step";
+        step.dataset.stage = event.id;
+        step.innerHTML = "<h3></h3><p></p><div class='hits'></div>";
+        trace.appendChild(step);
+      }
+      step.classList.toggle("running", event.status === "running");
+      step.classList.toggle("done", event.status === "done");
+      step.querySelector("h3").textContent = event.title;
+      step.querySelector("p").textContent = event.summary || "";
+      step.querySelector(".hits").innerHTML = event.status === "done" ? passageList(event.hits) : "";
+      scrollThread();
+    }
+
+    function showAnswer(turn, event) {
+      const reply = turn.querySelector(".reply");
+      const answer = event.answer || {};
+      if (!answer.available) {
+        reply.innerHTML = `<h3>Answer</h3><p class="prose">${escapeText(answer.reason || "No answer was produced.")}</p>`;
+        scrollThread();
+        return;
+      }
+      const sources = (answer.citations || []).map((item) => {
+        const mark = item.legacy_conflict ? " (legacy conflict)" : "";
+        return `<li>${escapeText(item.doc_name)}, ${escapeText(item.section)}, v${escapeText(item.version)}${escapeText(mark)} ${pill(item.status)}</li>`;
+      }).join("");
+      reply.innerHTML = `<h3>Answer</h3><p class="prose">${escapeText(answer.text)}</p><h3>Sources</h3><ul class="sources">${sources || "<li>(none)</li>"}</ul>`;
+      scrollThread();
+    }
+
+    function showError(turn, message) {
+      turn.querySelector(".reply").innerHTML = `<h3>Answer</h3><p class="prose">${escapeText(message)}</p>`;
+      scrollThread();
+    }
+
+    async function ask(question) {
+      const cleaned = question.trim();
+      if (!cleaned || busy || !overview) return;
+      document.querySelector("#question").value = "";
+      setBusy(true);
+      const turn = startTurn(cleaned);
+      try {
+        const response = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question: cleaned, k: overview.retrieve_k, generate: true }),
+        });
+        if (!response.ok) {
+          const payload = await response.json();
+          showError(turn, payload.error || "The question could not be searched.");
+          return;
+        }
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (true) {
+          const chunk = await reader.read();
+          if (chunk.done) break;
+          buffer += decoder.decode(chunk.value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop();
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            const event = JSON.parse(line);
+            if (event.event === "stage") upsertStep(turn, event);
+            else if (event.event === "answer") {
+              showAnswer(turn, event);
+              if (event.eval) await loadSession();
+            }
+            else if (event.event === "error") showError(turn, event.error || "Search failed.");
+          }
+        }
+      } catch (error) {
+        showError(turn, "The demo server stopped responding.");
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    function flag(value) {
+      if (value === true) return "yes";
+      if (value === false) return "no";
+      return "—";
+    }
+
+    function renderSession() {
+      const root = document.querySelector("#session");
+      if (!sessionTurns.length) {
+        root.innerHTML = `<h2>This chat</h2><p class="meta">Questions you ask show up here after the answer is written.</p>`;
+        return;
+      }
+      const rows = sessionTurns.map((turn) => {
+        const retrieval = turn.retrieval;
+        const generated = turn.generated;
+        const top = turn.top;
+        const cited = top
+          ? `${escapeText(top.doc_name)} v${escapeText(top.version)} ${pill(top.status)}`
+          : "—";
+        const recall = retrieval ? Number(retrieval.recall_at_k).toFixed(0) : "—";
+        const evalId = turn.in_eval_set ? escapeText(turn.query_id) : "—";
+        return `<tr>
+          <td>${escapeText(turn.question)}<div class="meta">${evalId}</div></td>
+          <td>${recall}</td>
+          <td>${retrieval ? flag(retrieval.answer_correct) : "—"}</td>
+          <td>${generated ? flag(generated.key_fact_correct) : "—"}</td>
+          <td>${generated ? flag(generated.grounded) : "—"}</td>
+          <td>${generated ? flag(generated.conflict_handled) : "—"}</td>
+          <td>${flag(turn.abstained)}</td>
+          <td>${cited}</td>
+        </tr>`;
+      }).join("");
+      root.innerHTML = `<h2>This chat</h2>
+        <p class="meta">Each row is scored after that answer is written. A dash means the question is not in that eval set, or generation did not run.</p>
+        <table>
+          <thead><tr>
+            <th>Question</th><th>Recall</th><th>Rank-1</th><th>Key fact</th><th>Grounded</th><th>Conflict</th><th>Abstained</th><th>Top passage</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>`;
+    }
+
+    async function loadSession() {
+      const response = await fetch("/api/session");
+      if (!response.ok) return;
+      const payload = await response.json();
+      sessionTurns = Array.isArray(payload.turns) ? payload.turns : [];
+      renderSession();
+    }
+
+    function metric(label, value) {
+      const shown = typeof value === "number" ? value.toFixed(3) : "—";
+      return `<div class="metric"><b>${shown}</b><span>${escapeText(label)}</span></div>`;
+    }
+
+    function renderScore(payload) {
+      const root = document.querySelector("#score");
+      if (!payload.available) {
+        root.innerHTML = `<p>${escapeText(payload.reason || "No scoreboard")}</p>`;
+        return;
+      }
+      const record = payload.record || {};
+      const retrieval = payload.retrieval || record.retrieval;
+      const generated = record.generated;
+      if (!retrieval) {
+        root.innerHTML = "<p>The record has no retrieval block.</p>";
+        return;
+      }
+      const generatedMetrics = generated
+        ? metric("key fact", generated.generated_key_fact)
+          + metric("citations", generated.citation_complete)
+          + metric("groundedness", generated.groundedness)
+          + metric("conflict handling", generated.conflict_handling)
+        : "";
+      const rows = retrieval.results.map((row) => `<tr>
+        <td>${escapeText(row.query_id)}</td>
+        <td>${row.recall_at_k.toFixed(0)}</td>
+        <td>${row.answer_correct ? "yes" : "no"}</td>
+        <td>${escapeText(row.retrieval_label)}</td>
+        <td>${escapeText(row.cited.doc_name)} v${escapeText(row.cited.version)} ${pill(row.cited.status)}</td>
+      </tr>`).join("");
+      const caption = payload.source === "live"
+        ? "Live retrieval on this index. No language model was called."
+        : `Captured record${record.llm ? " · " + record.llm.model : ""}.`;
+      root.innerHTML = `<p class="meta">${escapeText(caption)}</p>
+        <div class="metrics">
+          ${metric("recall@k", retrieval.recall_at_k)}
+          ${metric("extractive accuracy", retrieval.extractive_answer_accuracy)}
+          ${generatedMetrics}
+        </div>
+        <table>
+          <thead><tr><th>Query</th><th>Recall</th><th>Accurate</th><th>Label</th><th>Cited</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>`;
+    }
+
+    document.querySelectorAll("nav button").forEach((button) => {
+      button.addEventListener("click", () => {
+        document.querySelectorAll("nav button").forEach((item) => {
+          item.setAttribute("aria-selected", String(item === button));
+        });
+        const view = button.dataset.view;
+        document.querySelector("#view-ask").classList.toggle("hidden", view !== "ask");
+        document.querySelector("#view-corpus").classList.toggle("hidden", view !== "corpus");
+        document.querySelector("#view-score").classList.toggle("hidden", view !== "score");
+        if (view === "score") loadSession().catch(() => {});
+      });
+    });
+
+    document.querySelector("#prompts").addEventListener("click", (event) => {
+      const button = event.target.closest(".chip");
+      if (!button) return;
+      ask(button.dataset.question);
+    });
+
+    document.querySelector("#ask-form").addEventListener("submit", (event) => {
+      event.preventDefault();
+      ask(document.querySelector("#question").value);
+    });
+
+    document.querySelector("#question").addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        ask(document.querySelector("#question").value);
+      }
+    });
+
+    document.querySelector("#load-captured").addEventListener("click", async () => {
+      const response = await fetch("/api/eval");
+      renderScore(await response.json());
+    });
+
+    document.querySelector("#run-live").addEventListener("click", async () => {
+      const response = await fetch("/api/eval", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const payload = await response.json();
+      if (!response.ok) return;
+      renderScore(payload);
+    });
+
+    renderSession();
+    loadOverview().catch(() => {
+      document.querySelector("#llm").textContent = "The demo server is not responding.";
+    });
+  </script>
+</body>
+</html>

@@ -10,7 +10,14 @@ literally while the current text says the entitlement no longer exists. Letting
 the floor keep the legacy hit and drop its current twin would leave a window
 that cannot state current policy and cannot show the versions disagree, so a
 surviving legacy hit re-admits the best current hit from the same document.
-This module does not read or write the index.
+
+A second band covers questions no single clause answers. Cross-encoder logits
+for "what is this policy about" land below the factoid floor and well above
+an out-of-domain tail such as a Wi-Fi password. When the best score is still
+at or above :data:`~rag_lab.config.TOPIC_RERANK_SCORE`, hits within
+:data:`~rag_lab.config.TOPIC_RERANK_MARGIN` of that best score stay. A window
+whose best score is below that cutoff still abstains, and the companion rule
+does not resurrect it. This module does not read or write the index.
 """
 
 from __future__ import annotations
@@ -19,10 +26,18 @@ import math
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Literal
 
-from rag_lab.config import MIN_RERANK_SCORE, SHORT_QUERY_MAX_TOKENS
+from rag_lab.config import (
+    MIN_RERANK_SCORE,
+    SHORT_QUERY_MAX_TOKENS,
+    TOPIC_RERANK_MARGIN,
+    TOPIC_RERANK_SCORE,
+)
 from rag_lab.exceptions import GenerationError
 from rag_lab.rerank import RerankedHit
+
+ScreenBand = Literal["factoid", "topic", "none"]
 
 _TOKEN = re.compile(r"[A-Za-z0-9]+")
 _STATUS_CURRENT = "current"
@@ -41,34 +56,61 @@ class ScreenedContext:
     hits: tuple[RerankedHit, ...]
     abstain: bool
     has_legacy_conflict: bool
+    band: ScreenBand = "none"
 
 
 def screen_hits(question: str, hits: Sequence[RerankedHit]) -> ScreenedContext:
     """Drop irrelevant hits and put current policy ahead of legacy policy.
 
-    A score below :data:`~rag_lab.config.MIN_RERANK_SCORE` is removed. A score
-    equal to the threshold stays. When ``question`` has fewer than
-    :data:`~rag_lab.config.SHORT_QUERY_MAX_TOKENS` alphanumeric tokens, a hit
-    must contain that token. Longer questions skip the token check. A surviving
-    legacy hit then re-admits the best current hit of the same document, even
-    below the floor. An empty survivor list abstains before that, so the
-    exception cannot resurrect a window the floor rejected outright. The index
-    is not modified.
+    A score below :data:`~rag_lab.config.MIN_RERANK_SCORE` is removed when any
+    hit reaches that floor. A score equal to the threshold stays. When every
+    hit is below it, hits within :data:`~rag_lab.config.TOPIC_RERANK_MARGIN`
+    of the best score are kept if that best score is at or above
+    :data:`~rag_lab.config.TOPIC_RERANK_SCORE`. Otherwise the window abstains.
+    When ``question`` has fewer than :data:`~rag_lab.config.SHORT_QUERY_MAX_TOKENS`
+    alphanumeric tokens, a hit must contain that token. Longer questions skip
+    the token check. A surviving legacy hit then re-admits the best current
+    hit of the same document, even below the floor. An empty survivor list
+    abstains before that, so the exception cannot resurrect a window the
+    floor rejected outright. The index is not modified.
 
     Raises:
         GenerationError: If a hit score is not a finite number.
     """
     checked = tuple(_require_finite(hit) for hit in hits)
-    scored = tuple(hit for hit in checked if hit.score >= MIN_RERANK_SCORE)
+    scored, band = _select_by_score(checked)
     kept = _apply_lexical_gate(question, scored)
     if not kept:
-        return ScreenedContext(hits=(), abstain=True, has_legacy_conflict=False)
+        return ScreenedContext(hits=(), abstain=True, has_legacy_conflict=False, band="none")
     ordered = _current_then_legacy(_with_current_companions(question, kept, checked))
     return ScreenedContext(
         hits=ordered,
         abstain=False,
         has_legacy_conflict=_has_legacy_conflict(ordered),
+        band=band,
     )
+
+
+def _select_by_score(
+    hits: Sequence[RerankedHit],
+) -> tuple[tuple[RerankedHit, ...], ScreenBand]:
+    """Keep the factoid floor, or a tight band under a still-on-topic best score.
+
+    The factoid floor wins whenever any hit clears it, so a strong clause does
+    not drag its negative neighbors in. The topic band applies only when the
+    whole window is below that floor and the best score is still above the
+    out-of-domain cutoff.
+    """
+    if not hits:
+        return (), "none"
+    best = max(hit.score for hit in hits)
+    strong = tuple(hit for hit in hits if hit.score >= MIN_RERANK_SCORE)
+    if strong:
+        return strong, "factoid"
+    if best < TOPIC_RERANK_SCORE:
+        return (), "none"
+    cutoff = best - TOPIC_RERANK_MARGIN
+    return tuple(hit for hit in hits if hit.score >= cutoff), "topic"
 
 
 def _require_finite(hit: RerankedHit) -> RerankedHit:

@@ -15,8 +15,10 @@ from rag_lab import config
 from rag_lab.exceptions import GenerationError
 from rag_lab.generate import (
     ABSTAIN_TEXT,
+    OpenAIChatGenerator,
     generate_answer,
     generator_from_env,
+    local_llm_extra_body,
     render_answer,
 )
 from rag_lab.rerank import RerankedHit
@@ -35,6 +37,52 @@ _PTO_QUESTION = "How many Privilege Leave / PTO days do I get?"
 _CURRENT_PTO_SENTENCE = "The current Human Rights Policy does not specify a numeric PTO allowance."
 _DECOY = "Decoy passage about board sitting fees that must not appear in the prompt."
 _POSH_TEXT = "The Sexual Harassment Redressal Committee email id is shrc@coforge.com."
+
+
+class _Choice:
+    def __init__(self, content: str) -> None:
+        self.message = _Message(content)
+
+
+class _Message:
+    def __init__(self, content: str) -> None:
+        self.content = content
+
+
+class _Completion:
+    def __init__(self, content: str) -> None:
+        self.choices = [_Choice(content)]
+
+
+class _RecordingClient:
+    """Captures the chat-completions kwargs and returns a fixed reply."""
+
+    def __init__(self) -> None:
+        self.kwargs: dict[str, object] = {}
+        self.chat = self
+
+    @property
+    def completions(self) -> _RecordingClient:
+        return self
+
+    def create(self, **kwargs: object) -> _Completion:
+        self.kwargs = kwargs
+        return _Completion('{"grounded": true, "answer": "ok"}')
+
+
+def test_local_ollama_skips_the_reasoning_draft() -> None:
+    client = _RecordingClient()
+    generator = OpenAIChatGenerator(
+        client,
+        model="qwen3:8b",
+        extra_body=local_llm_extra_body("http://host.docker.internal:11434/v1"),
+    )
+    assert generator.complete("Question: hi") == '{"grounded": true, "answer": "ok"}'
+    assert client.kwargs["extra_body"] == {"think": False}
+
+
+def test_hosted_openai_does_not_send_the_ollama_think_switch() -> None:
+    assert local_llm_extra_body("") is None
 
 
 class _FakeGenerator:
@@ -293,7 +341,7 @@ def test_trailing_brace_after_the_contract_is_ignored() -> None:
 
 
 def test_brace_inside_the_answer_string_does_not_truncate_the_contract() -> None:
-    quoted = 'Send it to the SHRC using the {shrc} alias at shrc@coforge.com.'
+    quoted = "Send it to the SHRC using the {shrc} alias at shrc@coforge.com."
     fake = _FakeGenerator(f"{_json_answer(grounded=True, answer=quoted)}\ntrailing noise")
     answer = generate_answer("Where do I send a POSH complaint?", _posh_window(), fake)
 

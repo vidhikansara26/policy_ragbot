@@ -24,7 +24,7 @@ rag-lab = "rag_lab.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-rag_lab = ["py.typed"]
+rag_lab = ["py.typed", "ui/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

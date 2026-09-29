@@ -252,7 +252,7 @@ def test_companion_rule_keeps_the_highest_scoring_current_twin() -> None:
 
 
 def test_abstention_still_wins_when_nothing_clears_the_floor() -> None:
-    """The companion rule cannot resurrect a window the floor rejected outright."""
+    """The companion rule cannot resurrect a window the topic band rejected outright."""
     legacy = _hit(
         "hr-v1",
         _LEGACY_PTO,
@@ -260,7 +260,7 @@ def test_abstention_still_wins_when_nothing_clears_the_floor() -> None:
         section="3. Fair Wages and Remuneration",
         version=config.LEGACY_POLICY_VERSION,
         status="legacy",
-        score=-0.5,
+        score=-8.0,
     )
     current = _hit(
         "hr-v2",
@@ -269,11 +269,117 @@ def test_abstention_still_wins_when_nothing_clears_the_floor() -> None:
         section="5. Fair Wages and Remuneration",
         version=config.CURRENT_POLICY_VERSION,
         status="current",
-        score=-1.023,
+        score=-9.0,
     )
+    assert legacy.score < config.TOPIC_RERANK_SCORE
     screened = screen_hits("How many Privilege Leave / PTO days do I get?", [legacy, current])
     assert screened.abstain is True
     assert screened.hits == ()
+    assert screened.band == "none"
+
+
+def test_overview_question_keeps_passages_below_the_factoid_floor() -> None:
+    """Captured scores for a broad Human Rights question, not a day-count factoid."""
+    question = "what is human rights policy talking all about?"
+    legacy_preamble = _hit(
+        "v1-preamble",
+        "This reconstructed v1 stays in the corpus on purpose.",
+        doc_name=config.PLANTED_DOC_NAME,
+        section="Preamble",
+        version=config.LEGACY_POLICY_VERSION,
+        status="legacy",
+        score=-1.556,
+    )
+    scope = _hit(
+        "v2-scope",
+        "This policy is applicable to all group companies and their employees.",
+        doc_name=config.PLANTED_DOC_NAME,
+        section="2. Scope",
+        version=config.CURRENT_POLICY_VERSION,
+        status="current",
+        score=-1.576,
+    )
+    preamble = _hit(
+        "v2-preamble",
+        "Human Rights Policy FY 2025.",
+        doc_name=config.PLANTED_DOC_NAME,
+        section="Preamble",
+        version=config.CURRENT_POLICY_VERSION,
+        status="current",
+        score=-2.129,
+    )
+    commitments = _hit(
+        "v2-commitments",
+        "Coforge is committed to upholding the human rights of our stakeholders.",
+        doc_name=config.PLANTED_DOC_NAME,
+        section="3. Coforge's Commitments",
+        version=config.CURRENT_POLICY_VERSION,
+        status="current",
+        score=-4.118,
+    )
+    version_note = _hit(
+        "v1-version",
+        "Version history lists an initial release.",
+        doc_name=config.PLANTED_DOC_NAME,
+        section="6. Version",
+        version=config.LEGACY_POLICY_VERSION,
+        status="legacy",
+        score=-4.771,
+    )
+    screened = screen_hits(
+        question,
+        [legacy_preamble, scope, preamble, commitments, version_note],
+    )
+    assert screened.abstain is False
+    assert screened.band == "topic"
+    assert screened.has_legacy_conflict is True
+    assert [hit.chunk_id for hit in screened.hits] == [
+        "v2-scope",
+        "v2-preamble",
+        "v2-commitments",
+        "v1-preamble",
+    ]
+
+    published = (
+        "The current Human Rights Policy applies to group companies and their employees "
+        "and commits Coforge to uphold stakeholder human rights."
+    )
+    fake = _FakeGenerator(json.dumps({"grounded": True, "answer": published}))
+    answer = generate_answer(
+        question,
+        [legacy_preamble, scope, preamble, commitments, version_note],
+        fake,
+    )
+    assert fake.calls == 1
+    assert answer.abstained is False
+    assert answer.text == published
+    assert any(item.version == config.CURRENT_POLICY_VERSION for item in answer.citations)
+    assert any(item.legacy_conflict for item in answer.citations)
+
+
+def test_factoid_floor_does_not_widen_into_the_topic_band() -> None:
+    """A clause that clears 0.0 does not pull in a merely on-topic neighbor."""
+    legacy = _hit(
+        "hr-v1",
+        _LEGACY_PTO,
+        doc_name=config.PLANTED_DOC_NAME,
+        section="3. Fair Wages and Remuneration",
+        version=config.LEGACY_POLICY_VERSION,
+        status="legacy",
+        score=6.406,
+    )
+    neighbor = _hit(
+        "supplier",
+        _SUPPLIER_LEAVE,
+        doc_name="Supplier Code of Conduct",
+        section="Labor Management and Human Rights",
+        version="2025",
+        status="current",
+        score=-1.5,
+    )
+    screened = screen_hits("How many Privilege Leave / PTO days do I get?", [legacy, neighbor])
+    assert screened.band == "factoid"
+    assert [hit.chunk_id for hit in screened.hits] == ["hr-v1"]
 
 
 def test_short_pto_query_drops_supplier_leave_and_prefers_current() -> None:

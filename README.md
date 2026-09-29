@@ -84,6 +84,16 @@ python -m rag_lab compare "All.HR@coforge.com"
 
 The first run loads the embedding and rerank models and writes `chroma/`. Offline tests do not.
 
+## Demo UI
+
+A local chatbot over the same index. Each turn streams the search (dense, BM25 + reciprocal rank fusion, cross-encoder, safety screen) and then the grounded answer with citations. Human Rights v1 stays indexed. The scoreboard reads `eval/record.json` and can recompute retrieval without calling the model.
+
+```bash
+python -m rag_lab demo
+```
+
+Open http://127.0.0.1:8765. Start with **Stale PTO clause**. The thread shows each search step, then the answer and its sources. The demo reads `.env` for `RAG_LAB_LLM_MODEL` and `RAG_LAB_LLM_BASE_URL` when those are not already exported. From this container, Ollama on the host is `http://host.docker.internal:11434/v1` and the chat model is `qwen3:8b`.
+
 ## Layout
 
 ```
